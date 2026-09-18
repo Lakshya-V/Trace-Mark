@@ -13,3 +13,5 @@ SQLAlchemy
 torch
 torchvision
 uvicorn
+slowapi
+jwt

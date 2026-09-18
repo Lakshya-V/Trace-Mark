@@ -26,9 +26,11 @@ from database import init_db, get_db, User, UserSession, OTPChallenge, IssuedDoc
 from ecc_engine import TraceMarkECC
 from pdf_encoder import TraceMarkEncoder
 from inference_pipeline import TraceMarkDetector, infer_trace_bits
+from test_cropping import extract_patches
 
 # Initialize Storage Directories
 ARTIFACTS_DIR = Path("./artifacts")
+TEMP_UPLOADS_DIR = Path("./temp_uploads")
 ENCODED_DIR = ARTIFACTS_DIR / "encoded"
 UPLOADS_DIR = ARTIFACTS_DIR / "uploads"
 ENCODED_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,7 +68,7 @@ def verify_secret(value: str, hashed: str) -> bool:
 def on_startup():
     global detector
     init_db()
-    detector = TraceMarkDetector()
+    detector = TraceMarkDetector(model_path=Path(__file__).resolve().parent / "models" / "trace_mark_resnet18_robust.pth")
 
 # --- UTILS & DEPENDENCIES ---
 
@@ -83,7 +85,7 @@ def error_response(code: str, message: str, status_code: int):
 @app.post("/api/scan-document")
 @app.post("/api/scan")
 async def scan_document(file: UploadFile = File(...)):
-    """Classify an uploaded document image and return its predicted shift bit."""
+    """Extract page patches, infer their bits, and reconstruct the ECC payload."""
     allowed_types = {"image/jpeg", "image/png", "image/webp"}
     if file.content_type not in allowed_types:
         error_response("VALIDATION_ERROR", "Only JPEG, PNG, and WebP images are supported.", 400)
@@ -93,27 +95,56 @@ async def scan_document(file: UploadFile = File(...)):
 
     scan_id = str(uuid.uuid4())
     suffix = Path(file.filename or "upload.png").suffix.lower() or ".png"
-    image_path = UPLOADS_DIR / f"scan_{scan_id}{suffix}"
+    temp_upload_dir = TEMP_UPLOADS_DIR / f"upload_{scan_id}"
+    temp_patch_dir = temp_upload_dir / "patches"
+    image_path = temp_upload_dir / f"document{suffix}"
 
     try:
+        temp_patch_dir.mkdir(parents=True, exist_ok=True)
         with open(image_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        prediction = detector.predict_patch(image_path)
-        predicted_bit = prediction.get("bit") if isinstance(prediction, dict) else prediction
-        if predicted_bit not in (0, 1):
-            error_response("SCAN_FAILED", "Detector returned an invalid shift bit.", 422)
-        confidence = prediction.get("confidence", 0.0) if isinstance(prediction, dict) else 0.0
+        patch_paths = sorted(extract_patches(image_path, temp_patch_dir), key=lambda path: path.name)
+        if not patch_paths:
+            error_response("SCAN_FAILED", "No spatial patches were detected in the uploaded page.", 422)
+
+        bitstream = []
+        confidences = []
+        for patch_path in patch_paths:
+            prediction = detector.predict_patch(patch_path)
+            bit = prediction.get("bit") if isinstance(prediction, dict) else prediction
+            if bit not in (0, 1):
+                raise ValueError("Detector returned an invalid shift bit.")
+            bitstream.append(int(bit))
+            if isinstance(prediction, dict):
+                confidences.append(float(prediction.get("confidence", 0.0)))
+
+        detected_bit = 1 if sum(bitstream) > len(bitstream) / 2 else 0
+        confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        metadata = {"press_id": "Review Required", "center_code": "Review Required", "examination": "Review Required"}
+        status_value = "complete"
+        try:
+            decoded, _ = TraceMarkECC().decode_from_bitstream("".join(str(bit) for bit in bitstream))
+            metadata = {
+                "press_id": decoded.get("press_id", "Review Required"),
+                "center_code": decoded.get("center_id", "Review Required"),
+                "examination": decoded.get("exam_id", "Review Required"),
+            }
+        except Exception:
+            status_value = "Review Required"
+
         return {
-            "status": "complete",
-            "detected_shift": "Shift Left" if int(predicted_bit) == 0 else "Shift Right",
-            "prediction_bit": int(predicted_bit),
+            "status": status_value,
+            "total_patches_analyzed": len(bitstream),
+            "bitstream": bitstream,
+            "detected_shift": "Shift Left" if detected_bit == 0 else "Shift Right",
             "confidence": float(confidence),
+            "metadata": metadata,
             "pipeline": {"normalization": "Complete", "dewarp": "Complete", "decode": "Complete", "ecc_extraction": "Complete"},
         }
     except (OSError, ValueError) as exc:
         error_response("SCAN_FAILED", str(exc), 422)
     finally:
-        image_path.unlink(missing_ok=True)
+        shutil.rmtree(temp_upload_dir, ignore_errors=True)
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     authorization = request.headers.get("Authorization", "")

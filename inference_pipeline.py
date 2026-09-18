@@ -7,7 +7,7 @@ from torchvision.models import resnet18
 from torchvision.transforms import v2
 
 
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "models" / "trace_mark_resnet18.pth"
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "models" / "trace_mark_resnet18_robust.pth"
 
 
 class TraceMarkDetector:
