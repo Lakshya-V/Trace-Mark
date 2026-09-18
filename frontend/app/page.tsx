@@ -1003,9 +1003,9 @@ function InspectorPaperPreview({
                   </div>
                 </div>
 
-                {/* Optional Collapsible Forensic Verification Details */}
+                {/* Optional Collapsible Technical Details */}
                 <details style={{ fontSize: '11px', color: '#5b7682', cursor: 'pointer' }}>
-                  <summary style={{ fontWeight: 600, userSelect: 'none', padding: '4px 0' }}>Forensic Verification Details</summary>
+                  <summary style={{ fontWeight: 600, userSelect: 'none', padding: '4px 0' }}>Technical Details</summary>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', marginTop: '8px', padding: '8px', background: '#f6fbfb', borderRadius: '6px', border: '1px solid #e1eef0' }}>
                     <div>
                       <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Detector Head:</span>
