@@ -1,1 +1,14 @@
 env
+# Datasets and Images
+data/
+
+# Deep Learning Models
+models/
+
+# Databases
+*.db
+trace_mark.db
+
+# Python Cache
+__pycache__/
+*.pyc
