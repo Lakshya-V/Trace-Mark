@@ -1,4 +1,4 @@
-﻿{
+{
     "files.exclude": {
         "**/dataset": true,
         "**/generated_documents": true,
@@ -8,5 +8,6 @@
         "**/dataset/**": true,
         "**/generated_documents/**": true,
         "**/artifacts/**": true
-    }
+    },
+    "python-envs.defaultEnvManager": "ms-python.python:system"
 }
