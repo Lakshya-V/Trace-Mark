@@ -143,18 +143,72 @@ function Generator() {
 function DocumentPreview() { return <GlassCard className="document-preview"><div className="preview-toolbar"><div><span className="preview-dot" />Live preview</div><span>NB24-MATH-B · v1.0</span></div><div className="paper-sheet"><div className="paper-header"><div><small>GOVERNMENT OF INDIA</small><strong>NATIONAL BOARD EXAMINATION</strong><span>MATHEMATICS · SET B</span></div><div className="qr-mini" /></div><div className="paper-rule" /><div className="paper-meta"><span>Time: 3 Hours</span><span>Maximum Marks: 100</span></div><div className="paper-lines"><b>General Instructions:</b><span>1. All questions are compulsory.</span><span>2. Read each question carefully before answering.</span><span>3. Use of calculators is not permitted.</span></div><div className="watermark">TRACE-MARK<br /><small>AUTHENTICATED</small></div><div className="page-number">Page 01 of 12</div></div><div className="preview-caption"><div><span className="live-dot" />Marker overlay active</div><span>Preview updates in real time</span></div></GlassCard> }
 
 const pipeline = ['Normalization', 'Dewarp', 'Decode', 'ECC Extraction']
+
+type ScanResponse = {
+  prediction?: number
+  status?: string
+  data?: {
+    shift_bit?: number
+    prediction?: { bit?: number } | number
+  }
+  detail?: { error?: { message?: string } } | string
+}
+
 function Inspector() {
   const [scanning, setScanning] = useState(false)
   const [step, setStep] = useState(-1)
   const [done, setDone] = useState(false)
   const [drag, setDrag] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [shift, setShift] = useState<number | null>(null)
+  const [error, setError] = useState('')
+  const fileInput = useRef<HTMLInputElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout>[]>([])
-  const startScan = () => { timer.current.forEach(clearTimeout); setScanning(true); setDone(false); setStep(0); pipeline.forEach((_, i) => timer.current.push(setTimeout(() => setStep(i), i * 620))); timer.current.push(setTimeout(() => { setDone(true); setScanning(false); setStep(3) }, 2750)) }
+
+  const startScan = async (file: File | null = selectedFile) => {
+    if (!file || scanning) return
+
+    timer.current.forEach(clearTimeout)
+    setSelectedFile(file)
+    setScanning(true)
+    setDone(false)
+    setShift(null)
+    setError('')
+    setStep(0)
+    pipeline.forEach((_, i) => timer.current.push(setTimeout(() => setStep(i), i * 620)))
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'}/api/scan-document`, {
+        method: 'POST',
+        body: formData,
+      })
+      const payload = await response.json() as ScanResponse
+      if (!response.ok) {
+        const detail = typeof payload.detail === 'string' ? payload.detail : payload.detail?.error?.message
+        throw new Error(detail || 'The document scan failed.')
+      }
+
+      const prediction = payload.prediction ?? payload.data?.shift_bit ?? (typeof payload.data?.prediction === 'number' ? payload.data.prediction : payload.data?.prediction?.bit)
+      if (prediction !== 0 && prediction !== 1) throw new Error('The scan returned an invalid shift prediction.')
+      setShift(prediction)
+      setStep(3)
+      setDone(true)
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : 'Unable to reach the scan service.')
+    } finally {
+      setScanning(false)
+    }
+  }
+
   useEffect(() => () => timer.current.forEach(clearTimeout), [])
-  return <motion.div className="page" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .25 }}><PageHeading eyebrow="Forensic analysis" title="Leak inspector" description="Decode embedded markers and verify the provenance of an intercepted document." action={<div className="scan-status"><span className="live-dot" />Scanner ready</div>} /><div className="inspector-layout"><div><motion.div className={`dropzone ${drag ? 'dragging' : ''}`} onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); startScan() }} whileHover={{ scale: 1.005 }}><div className="drop-icon"><Upload size={21} /></div><h3>{scanning ? 'Analyzing document...' : 'Drop a document to inspect'}</h3><p>or click to browse from your secure workspace</p><span className="file-types">PNG · JPG · TIFF · PDF</span>{scanning && <motion.div className="laser-line" animate={{ top: ['18%', '82%', '18%'] }} transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }} />}</motion.div><div className="pipeline-card"><div className="pipeline-heading"><div><h2>Analysis pipeline</h2><p>Four-stage forensic extraction sequence</p></div><span className="pipeline-counter">{done ? 'Complete' : scanning ? `Stage ${step + 1} of 4` : 'Awaiting scan'}</span></div><div className="pipeline"><div className="pipeline-line"><motion.div animate={{ height: `${done ? 100 : Math.max(0, step) / 3 * 100}%` }} transition={{ duration: .45 }} /></div>{pipeline.map((name, i) => <motion.div className={`pipeline-step ${step > i || done ? 'complete' : step === i && scanning ? 'active' : ''}`} key={name}><div className="step-marker">{step > i || done ? <motion.div initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}><Check size={14} /></motion.div> : <span>{String(i + 1).padStart(2, '0')}</span>}</div><div><strong>{name}</strong><small>{step > i || done ? 'Complete' : step === i && scanning ? 'Processing…' : 'Pending'}</small></div>{step === i && scanning && <motion.span className="step-pulse" animate={{ scale: [1, 1.25, 1], opacity: [.5, 1, .5] }} transition={{ duration: 1, repeat: Infinity }} />}</motion.div>)}</div><button className="primary-button full" onClick={startScan} disabled={scanning}>{scanning ? <><Activity size={15} className="spin" /> Scanning document...</> : <><Zap size={15} /> Run forensic scan</>}</button></div></div><ResultsPanel visible={done} /></div></motion.div>
+
+  return <motion.div className="page" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .25 }}><PageHeading eyebrow="Forensic analysis" title="Leak inspector" description="Decode embedded markers and verify the provenance of an intercepted document." action={<div className="scan-status"><span className="live-dot" />{scanning ? 'Processing scan' : 'Scanner ready'}</div>} /><div className="inspector-layout"><div><motion.div className={`dropzone ${drag ? 'dragging' : ''}`} onClick={() => fileInput.current?.click()} onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); startScan(e.dataTransfer.files[0] ?? null) }} whileHover={{ scale: 1.005 }} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInput.current?.click() }}><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => startScan(e.target.files?.[0] ?? null)} /><div className="drop-icon"><Upload size={21} /></div><h3>{scanning ? 'Analyzing document...' : selectedFile ? selectedFile.name : 'Drop a document to inspect'}</h3><p>{scanning ? 'Waiting for the GPU to finish...' : 'or click to browse from your secure workspace'}</p><span className="file-types">PNG · JPG · WEBP</span>{scanning && <motion.div className="laser-line" animate={{ top: ['18%', '82%', '18%'] }} transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }} />}</motion.div><div className="pipeline-card"><div className="pipeline-heading"><div><h2>Analysis pipeline</h2><p>Four-stage forensic extraction sequence</p></div><span className="pipeline-counter">{done ? 'Complete' : scanning ? `Stage ${step + 1} of 4` : 'Awaiting scan'}</span></div><div className="pipeline"><div className="pipeline-line"><motion.div animate={{ height: `${done ? 100 : Math.max(0, step) / 3 * 100}%` }} transition={{ duration: .45 }} /></div>{pipeline.map((name, i) => <motion.div className={`pipeline-step ${step > i || done ? 'complete' : step === i && scanning ? 'active' : ''}`} key={name}><div className="step-marker">{step > i || done ? <motion.div initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}><Check size={14} /></motion.div> : <span>{String(i + 1).padStart(2, '0')}</span>}</div><div><strong>{name}</strong><small>{step > i || done ? 'Complete' : step === i && scanning ? 'Processing…' : 'Pending'}</small></div>{step === i && scanning && <motion.span className="step-pulse" animate={{ scale: [1, 1.25, 1], opacity: [.5, 1, .5] }} transition={{ duration: 1, repeat: Infinity }} />}</motion.div>)}</div><button className="primary-button full" onClick={() => startScan()} disabled={scanning || !selectedFile}>{scanning ? <><Activity size={15} className="spin" /> Scanning document...</> : <><Zap size={15} /> Run forensic scan</>}</button>{error && <p role="alert">{error}</p>}{done && shift !== null && <p role="status">Detected shift: <strong>{shift === 0 ? 'Shift Left' : 'Shift Right'}</strong></p>}</div></div><ResultsPanel visible={done} shift={shift} /></div></motion.div>
 }
 
-function ResultsPanel({ visible }: { visible: boolean }) { return <AnimatePresence>{visible ? <motion.div className="results-panel" initial={{ opacity: 0, scale: .96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .38 }}><div className="results-glow" /><div className="results-header"><div><div className="eyebrow"><span className="eyebrow-line" />Scan result</div><h2>Document verified as leaked</h2></div><motion.div className="verified-stamp" initial={{ scale: .4, rotate: -15 }} animate={{ scale: 1, rotate: 0 }} transition={spring}><Check size={20} /><span>VERIFIED</span></motion.div></div><div className="confidence"><div className="confidence-label"><span>Confidence score</span><strong><CountUp value={98} suffix=".7%" /></strong></div><div className="confidence-track"><motion.div initial={{ width: 0 }} animate={{ width: '98.7%' }} transition={{ delay: .25, duration: .8 }} /></div></div><div className="result-grid"><div><small>Decoded marker</small><strong className="mono-id">TM-NB24-0482-B</strong></div><div><small>Source center</small><strong>North District Center</strong></div><div><small>Press batch</small><strong>PR-0482 · Set B</strong></div><div><small>Scan timestamp</small><strong>18 Jun 2024 · 09:42:18</strong></div></div><button className="outline-button full">Open forensic report <ArrowUpRight size={14} /></button></motion.div> : null}</AnimatePresence> }
+function ResultsPanel({ visible, shift }: { visible: boolean; shift: number | null }) { return <AnimatePresence>{visible ? <motion.div className="results-panel" initial={{ opacity: 0, scale: .96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .38 }}><div className="results-glow" /><div className="results-header"><div><div className="eyebrow"><span className="eyebrow-line" />Scan result</div><h2>{shift === 0 ? 'Shift Left detected' : 'Shift Right detected'}</h2></div><motion.div className="verified-stamp" initial={{ scale: .4, rotate: -15 }} animate={{ scale: 1, rotate: 0 }} transition={spring}><Check size={20} /><span>DETECTED</span></motion.div></div><div className="result-grid"><div><small>Detected shift</small><strong>{shift === 0 ? 'Shift Left' : 'Shift Right'}</strong></div><div><small>Prediction bit</small><strong className="mono-id">{shift}</strong></div></div></motion.div> : null}</AnimatePresence> }
 
 function Audit() { const [query, setQuery] = useState(''); const rows = useMemo(() => auditRows.filter((row) => Object.values(row).join(' ').toLowerCase().includes(query.toLowerCase())), [query]); return <motion.div className="page" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .25 }}><PageHeading eyebrow="Chain of custody" title="Audit trail" description="A tamper-evident record of every document scan and forensic action." action={<button className="outline-button"><Archive size={15} /> Export log</button>} /><GlassCard className="table-card audit-card"><div className="audit-toolbar"><div className="search-box"><Search size={16} /><input placeholder="Search scans, files, analysts..." value={query} onChange={(e) => setQuery(e.target.value)} /></div><button className="filter-button"><SlidersHorizontal size={15} /> Filters <span>2</span></button></div><div className="table-wrap"><table><thead><tr><th>Scan ID</th><th>Source file</th><th>Analyst</th><th>Result</th><th>Confidence</th><th>Timestamp</th><th /></tr></thead><tbody>{rows.map((row, i) => <motion.tr key={row.scan} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * .04 }}><td><span className="mono-id">{row.scan}</span></td><td><div className="file-cell"><FileText size={15} />{row.file}</div></td><td>{row.analyst}</td><td><StatusBadge>{row.result}</StatusBadge></td><td><strong>{row.confidence}</strong></td><td className="muted">{row.date}</td><td><button className="row-more"><ArrowUpRight size={15} /></button></td></motion.tr>)}</tbody></table></div><div className="table-footer">Showing {rows.length} of 2,842 records <span>Page 1 of 285 <ChevronRight size={14} /></span></div></GlassCard></motion.div> }
 
