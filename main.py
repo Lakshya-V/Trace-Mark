@@ -22,7 +22,7 @@ from slowapi.errors import RateLimitExceeded
 from database import init_db, get_db, User, UserSession, IssuedDocument, ForensicScan, LeakFinding
 from ecc_engine import TraceMarkECC
 from pdf_encoder import TraceMarkEncoder
-from inference_pipeline import infer_trace_bits
+from inference_pipeline import TraceMarkDetector, infer_trace_bits
 
 # Initialize Storage Directories
 ARTIFACTS_DIR = Path("./artifacts")
@@ -47,10 +47,13 @@ app.add_middleware(
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = "trace_mark_jwt_secret_dev" # Move to .env in production
+detector: Optional[TraceMarkDetector] = None
 
 @app.on_event("startup")
 def on_startup():
+    global detector
     init_db()
+    detector = TraceMarkDetector()
 
 # --- UTILS & DEPENDENCIES ---
 
@@ -62,6 +65,38 @@ def error_response(code: str, message: str, status_code: int):
         status_code=status_code,
         detail={"error": {"code": code, "message": message}}
     )
+
+
+@app.post("/api/scan-document")
+@app.post("/api/scan")
+async def scan_document(file: UploadFile = File(...)):
+    """Classify an uploaded document image and return its predicted shift bit."""
+    allowed_types = {"image/jpeg", "image/png", "image/webp"}
+    if file.content_type not in allowed_types:
+        error_response("VALIDATION_ERROR", "Only JPEG, PNG, and WebP images are supported.", 400)
+
+    if detector is None:
+        error_response("SERVICE_UNAVAILABLE", "Detector is not initialized.", 503)
+
+    scan_id = str(uuid.uuid4())
+    suffix = Path(file.filename or "upload.png").suffix.lower() or ".png"
+    image_path = UPLOADS_DIR / f"scan_{scan_id}{suffix}"
+
+    try:
+        with open(image_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        prediction = detector.predict_patch(image_path)
+        predicted_bit = prediction.get("bit") if isinstance(prediction, dict) else prediction
+        if predicted_bit not in (0, 1):
+            error_response("SCAN_FAILED", "Detector returned an invalid shift bit.", 422)
+        return success_response({
+            "message": "Document scanned successfully",
+            "shift_bit": int(predicted_bit),
+        })
+    except (OSError, ValueError) as exc:
+        error_response("SCAN_FAILED", str(exc), 422)
+    finally:
+        image_path.unlink(missing_ok=True)
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     session_id = request.cookies.get("session_id")
@@ -222,7 +257,7 @@ async def decode_document(
         return success_response({"scan_uuid": scan_id, "metadata": {"exam_id": "NEET-2027-PHY", "center_id": "C404"}})
 
     try:
-        raw_results = infer_trace_bits(temp_image)
+        raw_results = infer_trace_bits(temp_image, detector)
         return success_response({"scan_uuid": scan_id, "results": raw_results})
     except NotImplementedError:
         error_response("SERVICE_UNAVAILABLE", "DL decoder not configured", 503)

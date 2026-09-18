@@ -1,11 +1,13 @@
 env
 artifacts/
+data/
 *.db
 __pycache__/
+*.pyc
 .pytest_cache/
 dl/
 dataset/
-models/ 
+models/
 generated_documents/ 
 *.pdf
 *.json

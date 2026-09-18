@@ -19,3 +19,8 @@ reedsolo
 SQLAlchemy
 uvicorn
 crcmod
+numpy
+opencv-python
+Pillow
+torch
+torchvision
