@@ -2,5 +2,12 @@ env
 artifacts/
 *.db
 __pycache__/
-*.pth
 .pytest_cache/
+dl/
+dataset/
+models/ 
+generated_documents/ 
+*.pdf
+*.json
+*.pth
+trace_mark.db

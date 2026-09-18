@@ -12,7 +12,7 @@ class TraceMarkEncoder:
     while generating an explicit ground-truth embedding map for ML dataset extraction.
     """
 
-    def __init__(self, shift_points: float = 0.12, seed: int = 1337, dpi: int = 144):
+    def __init__(self, shift_points: float = 0.25, seed: int = 1337, dpi: int = 144):
         self.shift_points = shift_points
         self.seed = seed
         self.dpi = dpi
