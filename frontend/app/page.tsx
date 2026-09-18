@@ -637,10 +637,10 @@ function DynamicGenerator({ token }: { token: string }) {
 
 
 const pipelineStages = [
-  'OpenCV Perspective Dewarp & Normalization',
-  'Illumination & Contrast Correction',
-  'Trace-Mark ResNet-18 DL Model Inference',
-  'Micro-spacing Bit & ECC Decoding',
+  'Document preprocessing',
+  'Illumination / normalization',
+  'Trace-Mark ResNet-18 inference',
+  'ECC decoding',
 ]
 
 function Inspector({ token }: { token?: string }) {
@@ -940,14 +940,14 @@ function InspectorPaperPreview({
                 transition={{ duration: 0.3 }}
                 style={{ marginTop: '16px', borderTop: '1px solid #dcebec', paddingTop: '14px' }}
               >
-                {/* Header: TRACE-MARK DETECTION */}
+                {/* Header: TRACE-MARK DETECTION RESULT */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <div>
                     <div className="eyebrow" style={{ marginBottom: '2px' }}>
-                      <span className="eyebrow-line" /> TRACE-MARK DETECTION
+                      <span className="eyebrow-line" /> TRACE-MARK DETECTION RESULT
                     </div>
                     <h3 style={{ margin: 0, fontSize: '16px', color: '#153b4d' }}>
-                      {isDetected ? '✓ Encoded information detected' : 'Scan Analysis Complete'}
+                      {isDetected ? '✓ ENCODED INFORMATION DETECTED' : 'Scan Analysis Complete'}
                     </h3>
                   </div>
                   <div className="verified-stamp" style={{ margin: 0 }}>
@@ -1009,20 +1009,20 @@ function InspectorPaperPreview({
                   <summary style={{ fontWeight: 600, userSelect: 'none', padding: '4px 0' }}>Technical Diagnostics</summary>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', marginTop: '8px', padding: '8px', background: '#f6fbfb', borderRadius: '6px', border: '1px solid #e1eef0' }}>
                     <div>
-                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Model Prediction Bit:</span>
-                      <strong className="mono-id">{result.prediction_bit ?? 0}</strong>
-                    </div>
-                    <div>
-                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Detected Shift:</span>
-                      <strong>{result.detected_shift || 'Shift Right'} ({pts > 0 ? `+${pts}` : pts} pt)</strong>
+                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Model Architecture:</span>
+                      <strong>ResNet-18 Robust</strong>
                     </div>
                     <div>
                       <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Patches Analyzed:</span>
                       <strong>{result.total_patches_analyzed ?? 1}</strong>
                     </div>
                     <div>
-                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>ECC Extraction:</span>
-                      <strong style={{ color: '#087e65' }}>Complete</strong>
+                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Model Bit Output:</span>
+                      <strong className="mono-id">Bit {result.prediction_bit ?? 0}</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>ECC Decoder:</span>
+                      <strong style={{ color: '#087e65' }}>Reed-Solomon RS(16)</strong>
                     </div>
                   </div>
                 </details>
