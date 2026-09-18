@@ -105,12 +105,18 @@ class TraceMarkEncoder:
                     })
                     total_gaps_modified += 1
 
+        press_val = metadata.get('press_id', '')
+        center_val = metadata.get('center_id', '') or metadata.get('center_code', '')
+        exam_val = metadata.get('exam_id', '') or metadata.get('examination', '')
+        batch_val = metadata.get('batch_id', '') or metadata.get('batch_code', '')
+        copy_val = metadata.get('copy_number', 1)
+
         # Embed document provenance into metadata
         doc_enc.set_metadata({
-            "title": f"Trace-Mark Protected: {metadata.get('exam_id', 'Exam')}",
+            "title": f"Trace-Mark Protected: {exam_val or 'Exam'}",
             "author": "Trace-Mark Forensic Engine",
-            "subject": f"Press: {metadata.get('press_id', '')} | Batch: {metadata.get('batch_id', '')} | Center: {metadata.get('center_id', '')} | Copy: {metadata.get('copy_number', 1)}",
-            "keywords": f"tracemark;payload_bits={payload_bit_len};gaps={total_gaps_modified};exam={metadata.get('exam_id', '')}",
+            "subject": f"Press: {press_val} | Batch: {batch_val} | Center: {center_val} | Copy: {copy_val} | Exam: {exam_val}",
+            "keywords": f"tracemark;press_id={press_val};center_code={center_val};examination={exam_val};batch_code={batch_val};copy_number={copy_val};payload_bits={payload_bit_len};gaps={total_gaps_modified}",
             "creator": "Trace-Mark Layout Forensic System"
         })
 

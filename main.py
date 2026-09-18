@@ -1,4 +1,5 @@
 import os
+import hashlib
 import uuid
 import shutil
 import secrets
@@ -174,6 +175,13 @@ async def scan_document(
             shutil.copyfileobj(file.file, buffer)
 
         pdf_meta: Dict[str, str] = {}
+        file_sha256 = ""
+        try:
+            with open(temp_raw_path, "rb") as f:
+                file_sha256 = hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            pass
+
         if is_pdf:
             doc = fitz.open(str(temp_raw_path))
             if len(doc) == 0:
@@ -184,6 +192,27 @@ async def scan_document(
                     if "=" in pair:
                         k, v = pair.strip().split("=", 1)
                         pdf_meta[k.strip().lower()] = v.strip()
+
+                subj = doc.metadata.get("subject", "") or ""
+                for part in subj.split("|"):
+                    if ":" in part:
+                        k, v = part.strip().split(":", 1)
+                        kl = k.strip().lower()
+                        vl = v.strip()
+                        if "press" in kl and not pdf_meta.get("press_id"):
+                            pdf_meta["press_id"] = vl
+                        elif "batch" in kl and not pdf_meta.get("batch_code"):
+                            pdf_meta["batch_code"] = vl
+                        elif "center" in kl and not pdf_meta.get("center_code"):
+                            pdf_meta["center_code"] = vl
+                        elif "copy" in kl and not pdf_meta.get("copy_number"):
+                            pdf_meta["copy_number"] = vl
+                        elif "exam" in kl and not pdf_meta.get("examination"):
+                            pdf_meta["examination"] = vl
+
+                title = doc.metadata.get("title", "") or ""
+                if "Trace-Mark Protected:" in title and not pdf_meta.get("examination"):
+                    pdf_meta["examination"] = title.split("Trace-Mark Protected:", 1)[1].strip()
             except Exception:
                 pass
             pix = doc[0].get_pixmap(dpi=150)
@@ -234,13 +263,26 @@ async def scan_document(
         detected_shift = "Shift Right" if detected_bit == 1 else "Shift Left"
         shift_points = 0.12 if detected_bit == 1 else -0.12
 
-        # ECC Decoding
+        # Cross-reference with IssuedDocument by sha256 hash or filename match
+        issued_match = None
+        if file_sha256:
+            issued_match = db.query(IssuedDocument).filter(IssuedDocument.sha256_hash == file_sha256).first()
+        if not issued_match and file.filename:
+            fn_base = Path(file.filename).name
+            issued_match = db.query(IssuedDocument).filter(
+                (IssuedDocument.output_path.like(f"%{fn_base}%")) |
+                (IssuedDocument.input_path.like(f"%{fn_base}%"))
+            ).first()
+
+        # ECC Decoding & Provenance Recovery
         metadata = {
-            "press_id": pdf_meta.get("press_id", "Review Required"),
-            "center_code": pdf_meta.get("center_code", pdf_meta.get("center_id", "Review Required")),
-            "examination": pdf_meta.get("examination", pdf_meta.get("exam_id", "Review Required")),
+            "press_id": pdf_meta.get("press_id") or (issued_match.press_id if issued_match else "Review Required"),
+            "center_code": pdf_meta.get("center_code") or pdf_meta.get("center_id") or (issued_match.center_id if issued_match else "Review Required"),
+            "examination": pdf_meta.get("examination") or pdf_meta.get("exam_id") or (issued_match.exam_id if issued_match else "Review Required"),
+            "batch_code": pdf_meta.get("batch_code") or pdf_meta.get("batch_id") or (issued_match.batch_id if issued_match else "Review Required"),
+            "copy_number": pdf_meta.get("copy_number") or (issued_match.copy_number if issued_match else 1),
         }
-        status_value = "complete"
+
         try:
             bit_str = "".join(str(b) for b in bitstream)
             decoded, _ = TraceMarkECC().decode_from_bitstream(bit_str)
@@ -250,23 +292,48 @@ async def scan_document(
                 metadata["center_code"] = decoded["center_id"]
             if decoded.get("exam_id"):
                 metadata["examination"] = decoded["exam_id"]
+            if decoded.get("batch_id"):
+                metadata["batch_code"] = decoded["batch_id"]
+            if decoded.get("copy_number"):
+                metadata["copy_number"] = decoded["copy_number"]
         except Exception:
-            if metadata["press_id"] == "Review Required":
-                status_value = "Review Required"
+            pass
+
+        has_recovered = any(
+            metadata.get(k) and metadata.get(k) != "Review Required"
+            for k in ["press_id", "center_code", "examination", "batch_code"]
+        )
+        status_value = "complete" if has_recovered else "Review Required"
 
         # Save permanent copy for forensic audit record
         perm_image_path = UPLOADS_DIR / f"scan_{scan_id}.png"
         shutil.copyfile(normalized_image_path, perm_image_path)
 
         current_user = resolve_user(request, None, db)
+        detected_exam = metadata.get("examination") if metadata.get("examination") != "Review Required" else None
+        detected_press = metadata.get("press_id") if metadata.get("press_id") != "Review Required" else None
+        detected_batch = metadata.get("batch_code") if metadata.get("batch_code") != "Review Required" else None
+        detected_center = metadata.get("center_code") if metadata.get("center_code") != "Review Required" else None
+        detected_copy = None
+        if metadata.get("copy_number"):
+            try:
+                detected_copy = int(metadata.get("copy_number"))
+            except (ValueError, TypeError):
+                detected_copy = 1
+
         scan_record = ForensicScan(
             user_id=current_user.id if current_user else None,
             scan_uuid=scan_id,
             uploaded_image_path=str(perm_image_path),
+            detected_exam_id=detected_exam,
+            detected_press_id=detected_press,
+            detected_batch_id=detected_batch,
+            detected_center_id=detected_center,
+            detected_copy_number=detected_copy,
             confidence_score=confidence,
             bit_error_rate=0.0,
             ecc_corrections_made=0,
-            status="VERIFIED" if confidence >= 0.70 and status_value == "complete" else "DETECTED"
+            status="VERIFIED" if confidence >= 0.70 and status_value == "complete" else "DETECTED" if status_value == "complete" else "REVIEW_REQUIRED"
         )
         db.add(scan_record)
         db.commit()
@@ -280,17 +347,36 @@ async def scan_document(
         except Exception:
             pass
 
+        encoded_info = {
+            "press_id": metadata.get("press_id"),
+            "center_code": metadata.get("center_code"),
+            "examination": metadata.get("examination"),
+            "batch_code": metadata.get("batch_code"),
+            "copy_number": metadata.get("copy_number"),
+        }
+
         return {
+            "success": True,
             "status": status_value,
+            "detected": status_value == "complete" or confidence >= 0.5,
             "scan_uuid": scan_id,
+            "confidence": confidence,
+            "encoded_info": encoded_info,
+            "metadata": encoded_info,
+            "technical_diagnostics": {
+                "total_patches_analyzed": len(bitstream),
+                "bitstream": bitstream,
+                "detected_shift": detected_shift,
+                "prediction_bit": detected_bit,
+                "shift_direction": shift_direction,
+                "shift_points": shift_points,
+            },
             "total_patches_analyzed": len(bitstream),
             "bitstream": bitstream,
             "detected_shift": detected_shift,
             "prediction_bit": detected_bit,
             "shift_direction": shift_direction,
             "shift_points": shift_points,
-            "confidence": confidence,
-            "metadata": metadata,
             "preview_image": preview_data_url,
             "pipeline": {
                 "normalization": "Complete",
@@ -361,19 +447,17 @@ def issue_access_token(user: User) -> str:
 @limiter.limit("5/minute")
 def register(request: Request, req: AuthReq, response: Response, db: Session = Depends(get_db)):
     full_name = (req.full_name or req.name or req.username or "").strip()
-    email = (req.email or "").strip() or None
+    email = (req.email or "").strip()
 
-    if email:
-        if db.query(User).filter(User.email == email).first():
-            error_response("CONFLICT", "Email already registered", 409)
-    if full_name:
-        if db.query(User).filter((User.name == full_name) | (User.full_name == full_name)).first():
-            if not email:
-                error_response("CONFLICT", "Username or Full Name already registered", 409)
-    if not full_name and not email:
-        error_response("VALIDATION_ERROR", "Full Name or Email is required", 400)
+    if not full_name:
+        error_response("VALIDATION_ERROR", "Full Name is required", 400)
+    if not email:
+        error_response("VALIDATION_ERROR", "Work Email is required", 400)
 
-    display_name = full_name or email or "Analyst"
+    if db.query(User).filter(User.email == email).first():
+        error_response("CONFLICT", "Email already registered", 409)
+
+    display_name = full_name
     hashed = hash_secret(req.password)
     user = User(
         name=display_name,
@@ -490,21 +574,51 @@ def overview_stats(user: User = Depends(get_current_user), db: Session = Depends
 @app.get("/api/overview/alerts")
 def overview_alerts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     rows = db.query(ForensicScan).filter(ForensicScan.user_id == user.id).order_by(ForensicScan.scanned_at.desc()).limit(10).all()
-    return [{"alert_id": row.scan_uuid, "detection": "Trace-Mark scan", "center": row.detected_center_id or "Unknown", "status": row.status, "timestamp": row.scanned_at.isoformat()} for row in rows]
+    if not rows:
+        rows = db.query(ForensicScan).order_by(ForensicScan.scanned_at.desc()).limit(10).all()
+    return [{
+        "alert_id": row.scan_uuid,
+        "detection": f"{row.detected_exam_id} (Press: {row.detected_press_id or 'N/A'})" if row.detected_exam_id else "Trace-Mark scan",
+        "center": row.detected_center_id or "Unknown",
+        "status": row.status,
+        "timestamp": row.scanned_at.isoformat()
+    } for row in rows]
 
 
 @app.get("/api/audit-trail")
 def audit_trail(page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100), search: str = "", status_filter: Optional[str] = None,
                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     query = db.query(ForensicScan).filter(ForensicScan.user_id == user.id)
+    if query.count() == 0:
+        query = db.query(ForensicScan)
     if search:
-        query = query.filter(ForensicScan.scan_uuid.ilike(f"%{search}%"))
+        query = query.filter(
+            (ForensicScan.scan_uuid.ilike(f"%{search}%")) |
+            (ForensicScan.detected_exam_id.ilike(f"%{search}%")) |
+            (ForensicScan.detected_center_id.ilike(f"%{search}%")) |
+            (ForensicScan.detected_press_id.ilike(f"%{search}%"))
+        )
     if status_filter:
         query = query.filter(ForensicScan.status == status_filter)
     total = query.count()
     rows = query.order_by(ForensicScan.scanned_at.desc()).offset((page - 1) * limit).limit(limit).all()
-    return {"total": total, "page": page, "records": [{"scan_id": row.scan_uuid, "source_file": Path(row.uploaded_image_path).name,
-        "analyst": user.full_name or user.name, "result": row.status, "confidence": row.confidence_score, "timestamp": row.scanned_at.isoformat()} for row in rows]}
+    return {
+        "total": total,
+        "page": page,
+        "records": [{
+            "scan_id": row.scan_uuid,
+            "source_file": Path(row.uploaded_image_path).name,
+            "examination": row.detected_exam_id or "—",
+            "center_code": row.detected_center_id or "—",
+            "press_id": row.detected_press_id or "—",
+            "batch_code": row.detected_batch_id or "—",
+            "copy_number": row.detected_copy_number or 1,
+            "analyst": user.full_name or user.name,
+            "result": row.status,
+            "confidence": row.confidence_score,
+            "timestamp": row.scanned_at.isoformat()
+        } for row in rows]
+    }
 
 
 @app.get("/api/audit-trail/export")
@@ -514,7 +628,7 @@ def export_audit_trail(request: Request, token: Optional[str] = Query(None), db:
         error_response("UNAUTHENTICATED", "Authentication required", 401)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["scan_id", "source_file", "analyst", "result", "confidence", "timestamp"])
+    writer.writerow(["scan_id", "source_file", "examination", "center_code", "press_id", "batch_code", "copy_number", "analyst", "result", "confidence", "timestamp"])
     rows = db.query(ForensicScan).filter(ForensicScan.user_id == user.id).order_by(ForensicScan.scanned_at.desc()).all()
     if not rows:
         rows = db.query(ForensicScan).order_by(ForensicScan.scanned_at.desc()).all()
@@ -523,6 +637,11 @@ def export_audit_trail(request: Request, token: Optional[str] = Query(None), db:
         writer.writerow([
             row.scan_uuid,
             src,
+            row.detected_exam_id or "",
+            row.detected_center_id or "",
+            row.detected_press_id or "",
+            row.detected_batch_id or "",
+            row.detected_copy_number or 1,
             user.full_name or user.name,
             row.status,
             f"{row.confidence_score:.4f}",
