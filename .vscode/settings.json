@@ -1,0 +1,12 @@
+﻿{
+    "files.exclude": {
+        "**/dataset": true,
+        "**/generated_documents": true,
+        "**/artifacts": true
+    },
+    "files.watcherExclude": {
+        "**/dataset/**": true,
+        "**/generated_documents/**": true,
+        "**/artifacts/**": true
+    }
+}
