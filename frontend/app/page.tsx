@@ -40,6 +40,18 @@ const navItems = [
 
 type PageId = (typeof navItems)[number]['id']
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+
+async function apiRequest<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
+  const headers = new Headers(init.headers)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.detail?.error?.message || payload.detail || 'Request failed')
+  return payload.data ?? payload
+}
+
 const alerts = [
   { id: 'AL-9821', type: 'Watermark match', detail: 'Mathematics · Set B', center: 'North District Center', status: 'Verified', time: '2 min ago' },
   { id: 'AL-9818', type: 'Pattern anomaly', detail: 'Physics · Set A', center: 'Central Examination Board', status: 'Review', time: '18 min ago' },
@@ -106,7 +118,9 @@ function Sidebar({ active, onNavigate }: { active: PageId; onNavigate: (id: Page
 
 function TopBar({ active, onReport, onLogout }: { active: PageId; onReport: () => void; onLogout: () => void }) {
   const label = navItems.find((item) => item.id === active)?.label
-  return <header className="topbar"><div className="mobile-menu"><Menu size={19} /></div><div className="breadcrumb"><span>Trace-Mark</span><ChevronRight size={14} /><strong>{label}</strong></div><div className="top-actions"><div className="security-chip"><span className="live-dot" />Secure session</div><button className="icon-button" aria-label="Notifications"><Bell size={17} /><span className="notification-dot" /></button><button className="avatar">RS</button><button className="logout-button" onClick={onLogout}><LogOut size={15} /> <span>Log out</span></button><button className="report-button" onClick={onReport}><FileText size={15} /> Forensic report <ArrowUpRight size={14} /></button></div></header>
+  const [menu, setMenu] = useState<'notifications' | 'profile' | null>(null)
+  const toggleMenu = (next: 'notifications' | 'profile') => setMenu((current) => current === next ? null : next)
+  return <header className="topbar"><div className="mobile-menu"><Menu size={19} /></div><div className="breadcrumb"><span>Trace-Mark</span><ChevronRight size={14} /><strong>{label}</strong></div><div className="top-actions"><div className="security-chip"><span className="live-dot" />Secure session</div><div className="top-menu"><button className="icon-button" aria-label="Notifications" aria-expanded={menu === 'notifications'} onClick={() => toggleMenu('notifications')}><Bell size={17} /><span className="notification-dot" /></button>{menu === 'notifications' && <div className="top-dropdown"><strong>Notifications</strong><span>No new alerts.</span></div>}</div><div className="top-menu"><button className="avatar" aria-label="Open profile" aria-expanded={menu === 'profile'} onClick={() => toggleMenu('profile')}>TM</button>{menu === 'profile' && <div className="top-dropdown"><strong>Profile</strong><span>Account settings are coming soon.</span></div>}</div><button className="logout-button" onClick={onLogout}><LogOut size={15} /> <span>Log out</span></button><button className="report-button" onClick={onReport}><FileText size={15} /> Forensic report <ArrowUpRight size={14} /></button></div></header>
 }
 
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
@@ -140,12 +154,14 @@ function Generator() {
   return <motion.div className="page" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .25 }}><PageHeading eyebrow="Secure issuance" title="Paper generator" description="Create traceable examination papers with embedded forensic markers." action={<button className="primary-button"><CloudUpload size={16} /> Generate paper</button>} /><div className="generator-layout"><GlassCard className="form-card"><div className="card-heading"><div><h2>Paper details</h2><p>Every field is encrypted and logged.</p></div><FileCheck2 size={19} className="heading-icon" /></div><label>Examination<input defaultValue="National Board Examination · 2024" /></label><label>Press ID<div className="input-with-icon"><input defaultValue="PR-0482 / Government Press" /><Check size={15} /></div></label><div className="form-row"><label>Batch code<input defaultValue="NB24-MATH-B" /></label><label>Center code<input defaultValue="NDC-0041" /></label></div><label>Source document<div className="upload-small"><Upload size={17} /><span>Drop source file or <b>browse</b><small>PDF, DOCX up to 20 MB</small></span></div></label><button className="primary-button full">Generate PDF <ArrowUpRight size={15} /></button></GlassCard><DocumentPreview /></div></motion.div>
 }
 
-function DocumentPreview() { return <GlassCard className="document-preview"><div className="preview-toolbar"><div><span className="preview-dot" />Live preview</div><span>NB24-MATH-B · v1.0</span></div><div className="paper-sheet"><div className="paper-header"><div><small>GOVERNMENT OF INDIA</small><strong>NATIONAL BOARD EXAMINATION</strong><span>MATHEMATICS · SET B</span></div><div className="qr-mini" /></div><div className="paper-rule" /><div className="paper-meta"><span>Time: 3 Hours</span><span>Maximum Marks: 100</span></div><div className="paper-lines"><b>General Instructions:</b><span>1. All questions are compulsory.</span><span>2. Read each question carefully before answering.</span><span>3. Use of calculators is not permitted.</span></div><div className="watermark">TRACE-MARK<br /><small>AUTHENTICATED</small></div><div className="page-number">Page 01 of 12</div></div><div className="preview-caption"><div><span className="live-dot" />Marker overlay active</div><span>Preview updates in real time</span></div></GlassCard> }
+function DocumentPreview({ form }: { form?: { examination: string; press_id: string; batch_code: string; center_code: string } }) { const examination = form?.examination || 'National Board Examination · 2024'; const pressId = form?.press_id || 'PR-0482 / Government Press'; const batchCode = form?.batch_code || 'NB24-MATH-B'; const centerCode = form?.center_code || 'NDC-0041'; return <GlassCard className="document-preview"><div className="preview-toolbar"><div><span className="preview-dot" />Live preview</div><span>{batchCode} · v1.0</span></div><div className="paper-sheet"><div className="paper-header"><div><small>{centerCode}</small><strong>{examination}</strong><span>{pressId}</span></div><div className="qr-mini" /></div><div className="paper-rule" /><div className="paper-meta"><span>Batch: {batchCode}</span><span>Center: {centerCode}</span></div><div className="paper-lines"><b>Traceable source document</b><span>Press ID: {pressId}</span><span>Embedded provenance markers will be applied to every page.</span></div><div className="watermark">TRACE-MARK<br /><small>AUTHENTICATED</small></div><div className="page-number">Live preview</div></div><div className="preview-caption"><div><span className="live-dot" />Marker overlay active</div><span>Preview updates in real time</span></div></GlassCard> }
 
 const pipeline = ['Normalization', 'Dewarp', 'Decode', 'ECC Extraction']
 
 type ScanResponse = {
   prediction?: number
+  prediction_bit?: number
+  detected_shift?: string
   status?: string
   data?: {
     shift_bit?: number
@@ -191,7 +207,7 @@ function Inspector() {
         throw new Error(detail || 'The document scan failed.')
       }
 
-      const prediction = payload.prediction ?? payload.data?.shift_bit ?? (typeof payload.data?.prediction === 'number' ? payload.data.prediction : payload.data?.prediction?.bit)
+      const prediction = payload.prediction_bit ?? payload.prediction ?? payload.data?.shift_bit ?? (typeof payload.data?.prediction === 'number' ? payload.data.prediction : payload.data?.prediction?.bit)
       if (prediction !== 0 && prediction !== 1) throw new Error('The scan returned an invalid shift prediction.')
       setShift(prediction)
       setStep(3)
@@ -223,4 +239,80 @@ function AuthScreen({ mode, onModeChange, onSuccess }: { mode: 'login' | 'regist
   return <main className="auth-shell"><section className="auth-panel"><div className="auth-brand"><div className="brand-mark"><Fingerprint size={21} strokeWidth={2.4} /></div><div><div className="brand-name">Trace<span>-</span>Mark</div><div className="brand-sub">FORENSICS PLATFORM</div></div></div><div className="auth-copy"><div className="eyebrow"><span className="eyebrow-line" />Secure workspace</div><h1>{isLogin ? 'Welcome back' : 'Create your workspace'}</h1><p>{isLogin ? 'Sign in to continue monitoring document provenance and forensic activity.' : 'Register your secure account to start protecting examination documents.'}</p></div>{resetRequested && isLogin && <div className="otp-card"><div className="otp-icon"><LockKeyhole size={16} /></div><div><strong>{otpVerified ? 'Code verified' : 'Check your email'}</strong><p>{otpVerified ? 'You can now continue with password recovery.' : `We sent a one-time code to ${email || 'your account email'}.`}</p></div>{!otpVerified && <div className="otp-entry"><label htmlFor="reset-otp">One-time passcode</label><input id="reset-otp" inputMode="numeric" maxLength={6} placeholder="Enter 6-digit OTP" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\\D/g, ''))} /><button type="button" className="primary-button" disabled={otp.length !== 6} onClick={() => setOtpVerified(true)}>Verify code</button></div>}<button type="button" className="otp-cancel" onClick={() => { setResetRequested(false); setOtp(''); setOtpVerified(false) }}>Back to sign in</button></div>}<form className="auth-form" onSubmit={(event) => { event.preventDefault(); onSuccess() }}><label>Work email<input type="email" placeholder="you@organization.gov" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>Password<input type="password" placeholder="Enter your password" required /></label>{!isLogin && <label>Confirm password<input type="password" placeholder="Re-enter your password" required /></label>}<div className="auth-options">{isLogin ? <label className="remember"><input type="checkbox" /> Remember me</label> : <span className="auth-note">By registering, you agree to the secure workspace terms.</span>}{isLogin && <button type="button" className="forgot" onClick={() => setResetRequested(true)}>Forgot password?</button>}</div><button className="primary-button auth-submit" type="submit">{isLogin ? 'Sign in to Trace-Mark' : 'Create secure account'}<ArrowUpRight size={15} /></button></form><p className="auth-switch">{isLogin ? 'New to Trace-Mark?' : 'Already have an account?'} <button type="button" onClick={() => onModeChange(isLogin ? 'register' : 'login')}>{isLogin ? 'Create an account' : 'Sign in'}</button></p><div className="auth-footer"><LockKeyhole size={13} /> End-to-end encrypted workspace</div></section><aside className="auth-visual"><div className="auth-visual-inner"><div className="visual-kicker">DOCUMENT FORENSICS · 02</div><h2>Trust every<br /><em>document.</em></h2><p>Trace provenance. Detect leaks. Preserve confidence.</p><div className="visual-orbit"><div className="orbit-ring ring-one" /><div className="orbit-ring ring-two" /><div className="orbit-core"><Fingerprint size={36} /></div></div><div className="visual-stat"><strong>98.7%</strong><span>average verification confidence</span></div></div></aside></main>
 }
 
-export default function Page() { const [active, setActive] = useState<PageId>('overview'); const [report, setReport] = useState(false); const [authMode, setAuthMode] = useState<'login' | 'register'>('login'); const [authenticated, setAuthenticated] = useState(false); if (!authenticated) return <AuthScreen mode={authMode} onModeChange={setAuthMode} onSuccess={() => setAuthenticated(true)} />; return <div className="app-shell"><Sidebar active={active} onNavigate={setActive} /><div className="content-shell"><TopBar active={active} onReport={() => setReport(true)} onLogout={() => { setReport(false); setAuthenticated(false); setAuthMode('login') }} /><main className="main-content"><AnimatePresence mode="wait">{active === 'overview' && <Overview key="overview" onReport={() => setReport(true)} />}{active === 'generator' && <Generator key="generator" />}{active === 'inspector' && <Inspector key="inspector" />}{active === 'audit' && <Audit key="audit" />}</AnimatePresence></main></div><AnimatePresence>{report && <ReportModal onClose={() => setReport(false)} />}</AnimatePresence></div> }
+function LegacyPage() { const [active, setActive] = useState<PageId>('overview'); const [report, setReport] = useState(false); const [authMode, setAuthMode] = useState<'login' | 'register'>('login'); const [authenticated, setAuthenticated] = useState(false); if (!authenticated) return <AuthScreen mode={authMode} onModeChange={setAuthMode} onSuccess={() => setAuthenticated(true)} />; return <div className="app-shell"><Sidebar active={active} onNavigate={setActive} /><div className="content-shell"><TopBar active={active} onReport={() => setReport(true)} onLogout={() => { setReport(false); setAuthenticated(false); setAuthMode('login') }} /><main className="main-content"><AnimatePresence mode="wait">{active === 'overview' && <Overview key="overview" onReport={() => setReport(true)} />}{active === 'generator' && <Generator key="generator" />}{active === 'inspector' && <Inspector key="inspector" />}{active === 'audit' && <Audit key="audit" />}</AnimatePresence></main></div><AnimatePresence>{report && <ReportModal onClose={() => setReport(false)} />}</AnimatePresence></div> }
+
+type SessionUser = { id: number; full_name?: string; name: string; email: string; organization_name?: string; role?: string }
+type Session = { user: SessionUser; access_token: string }
+type OverviewStats = { scans_this_month: number; leaks_verified: number; documents_secured: number; avg_confidence: number }
+type OverviewAlert = { alert_id: string; detection: string; center: string; status: string; timestamp: string }
+type AuditRecord = { scan_id: string; source_file: string; analyst: string; result: string; confidence: number; timestamp: string }
+
+function DynamicAuth({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [otpStep, setOtpStep] = useState(false)
+  const [form, setForm] = useState({ full_name: '', organization_name: '', press_id: '', center_code: '', email: '', password: '', confirm_password: '', otp: '' })
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const update = (key: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement>) => setForm((current) => ({ ...current, [key]: event.target.value }))
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setBusy(true); setMessage('')
+    try {
+      if (mode === 'register') {
+        if (form.password !== form.confirm_password) throw new Error('Passwords do not match.')
+        const session = await apiRequest<Session>('/api/auth/register', { method: 'POST', body: JSON.stringify({ full_name: form.full_name, organization_name: form.organization_name, press_id: form.press_id, center_code: form.center_code, email: form.email, password: form.password }) })
+        onAuthenticated(session)
+      } else if (!otpStep) {
+        const result = await apiRequest<{ development_otp?: string }>('/api/auth/login-step1', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) })
+        setOtpStep(true)
+        setMessage(result.development_otp ? `Development OTP: ${result.development_otp}` : 'Enter the 6-digit code sent to your email.')
+      } else {
+        const session = await apiRequest<Session>('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email: form.email, otp: form.otp }) })
+        onAuthenticated(session)
+      }
+    } catch (authError) { setMessage(authError instanceof Error ? authError.message : 'Authentication failed.') } finally { setBusy(false) }
+  }
+
+  const fields = mode === 'register' ? [['full_name', 'Full Name'], ['organization_name', 'Organization Name'], ['press_id', 'Press ID'], ['center_code', 'Center Code']] as const : []
+  return <main className="auth-shell"><section className="auth-panel"><div className="auth-brand"><div className="brand-mark"><Fingerprint size={21} strokeWidth={2.4} /></div><div><div className="brand-name">Trace<span>-</span>Mark</div><div className="brand-sub">FORENSICS PLATFORM</div></div></div><div className="auth-copy"><div className="eyebrow"><span className="eyebrow-line" />Secure workspace</div><h1>{otpStep ? 'Verify your identity' : mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h1><p>{otpStep ? 'Enter the 6-digit code sent to your email.' : 'Connect to your document provenance workspace.'}</p></div><form className="auth-form" onSubmit={submit} autoComplete={mode === 'login' ? 'on' : 'off'}>{otpStep ? <label>6-digit OTP<input className="auth-input" inputMode="numeric" maxLength={6} autoComplete="one-time-code" value={form.otp} onChange={update('otp')} required /></label> : <>{fields.map(([key, label]) => <label key={key}>{label}<input className="auth-input" autoComplete="name" value={form[key]} onChange={update(key)} required /></label>)}<label>Work Email<input className="auth-input" type="email" autoComplete="email" value={form.email} onChange={update('email')} required /></label><label>Password<input className="auth-input" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={update('password')} required /></label>{mode === 'register' && <label>Confirm Password<input className="auth-input" type="password" autoComplete="new-password" value={form.confirm_password} onChange={update('confirm_password')} required /></label>}</>}{message && <p role="alert">{message}</p>}<button className="primary-button auth-submit" disabled={busy}>{busy ? 'Please wait...' : otpStep ? 'Verify code' : mode === 'login' ? 'Continue to verification' : 'Create secure account'}<ArrowUpRight size={15} /></button></form><p className="auth-switch">{mode === 'login' ? 'New to Trace-Mark?' : 'Already have an account?'} <button type="button" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setOtpStep(false); setMessage('') }}>{mode === 'login' ? 'Create an account' : 'Sign in'}</button></p></section><aside className="auth-visual"><div className="auth-visual-inner"><div className="visual-kicker">DOCUMENT FORENSICS · 02</div><h2>Trust every<br /><em>document.</em></h2><p>Trace provenance. Detect leaks. Preserve confidence.</p></div></aside></main>
+}
+
+function DynamicOverview({ token, user }: { token: string; user: SessionUser }) {
+  const [stats, setStats] = useState<OverviewStats | null>(null)
+  const [alerts, setAlerts] = useState<OverviewAlert[]>([])
+  const [error, setError] = useState('')
+  useEffect(() => { Promise.all([apiRequest<OverviewStats>('/api/overview/stats', {}, token), apiRequest<OverviewAlert[]>('/api/overview/alerts', {}, token)]).then(([nextStats, nextAlerts]) => { setStats(nextStats); setAlerts(nextAlerts) }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Unable to load overview.')) }, [token])
+  const values = stats ? [{ label: 'Scans this month', value: stats.scans_this_month, tone: 'blue' }, { label: 'Leaks verified', value: stats.leaks_verified, tone: 'red' }, { label: 'Documents secured', value: stats.documents_secured, tone: 'green' }, { label: 'Avg. confidence', value: Math.round(stats.avg_confidence * 100), suffix: '%', tone: 'purple' }] : []
+  return <motion.div className="page"><PageHeading eyebrow="Command overview" title={`Hello, ${user.full_name || user.name}`} description="Monitor document provenance and investigate suspected leaks across the network." />{error && <p role="alert">{error}</p>}<motion.div className="metrics-grid">{values.map((metric) => <MetricCard key={metric.label} label={metric.label} value={metric.value} suffix={metric.suffix} note="Live from Trace-Mark" icon={BarChart3} tone={metric.tone} />)}</motion.div><GlassCard className="table-card"><div className="card-heading"><div><h2>Recent alerts</h2><p>Live detections from the last 24 hours</p></div></div><div className="table-wrap"><table><thead><tr><th>Alert ID</th><th>Detection</th><th>Center</th><th>Status</th><th>Detected</th></tr></thead><tbody>{alerts.map((row) => <tr key={row.alert_id}><td><span className="mono-id">{row.alert_id}</span></td><td>{row.detection}</td><td>{row.center}</td><td><StatusBadge>{row.status}</StatusBadge></td><td className="muted">{new Date(row.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div></GlassCard></motion.div>
+}
+
+function DynamicGenerator({ token }: { token: string }) {
+  const [form, setForm] = useState({ examination: '', press_id: '', batch_code: '', center_code: '' })
+  const [file, setFile] = useState<File | null>(null)
+  const [downloadUrl, setDownloadUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (!file) return setError('Choose a PDF source document.'); setBusy(true); setError(''); const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.append(key, value)); body.append('file', file); try { const result = await apiRequest<{ download_url: string }>('/api/generate-paper', { method: 'POST', body }, token); setDownloadUrl(`${API_BASE}${result.download_url}`) } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Generation failed.') } finally { setBusy(false) } }
+  const update = (key: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement>) => setForm((current) => ({ ...current, [key]: event.target.value }))
+  return <motion.div className="page"><PageHeading eyebrow="Secure issuance" title="Paper generator" description="Create traceable examination papers with embedded forensic markers." /> <div className="generator-layout"><GlassCard className="form-card"><form onSubmit={submit}><div className="card-heading"><div><h2>Paper details</h2><p>Every field is encrypted and logged.</p></div></div>{(['examination', 'press_id', 'batch_code', 'center_code'] as const).map((key) => <label key={key}>{key.replace('_', ' ')}<input className="generator-input" value={form[key]} onChange={update(key)} required /></label>)}<label>Source document<input className="generator-input" type="file" accept="application/pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} required /></label>{error && <p role="alert">{error}</p>}<button className="primary-button full" disabled={busy}>{busy ? 'Generating...' : 'Generate PDF'}<ArrowUpRight size={15} /></button>{downloadUrl && <a className="outline-button full" href={downloadUrl} target="_blank" rel="noreferrer">Download generated PDF</a>}</form></GlassCard><DocumentPreview form={form} /></div></motion.div>
+}
+
+function DynamicAudit({ token }: { token: string }) {
+  const [records, setRecords] = useState<AuditRecord[]>([]); const [query, setQuery] = useState(''); const [page, setPage] = useState(1); const [total, setTotal] = useState(0); const [error, setError] = useState('')
+  useEffect(() => { const params = new URLSearchParams({ page: String(page), limit: '20', search: query }); apiRequest<{ total: number; records: AuditRecord[] }>(`/api/audit-trail?${params}`, {}, token).then((result) => { setTotal(result.total); setRecords(result.records) }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Unable to load audit trail.')) }, [page, query, token])
+  return <motion.div className="page"><PageHeading eyebrow="Chain of custody" title="Audit trail" description="A tamper-evident record of every document scan and forensic action." action={<a className="outline-button" href={`${API_BASE}/api/audit-trail/export`} target="_blank" rel="noreferrer"><Archive size={15} /> Export log</a>} />{error && <p role="alert">{error}</p>}<GlassCard className="table-card audit-card"><div className="audit-toolbar"><div className="search-box"><Search size={16} /><input placeholder="Search scans or files..." value={query} onChange={(event) => { setPage(1); setQuery(event.target.value) }} /></div></div><div className="table-wrap"><table><thead><tr><th>Scan ID</th><th>Source file</th><th>Analyst</th><th>Result</th><th>Confidence</th><th>Timestamp</th></tr></thead><tbody>{records.map((row) => <tr key={row.scan_id}><td><span className="mono-id">{row.scan_id}</span></td><td>{row.source_file}</td><td>{row.analyst}</td><td><StatusBadge>{row.result}</StatusBadge></td><td>{Math.round(row.confidence * 100)}%</td><td className="muted">{new Date(row.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div><div className="table-footer">Showing {records.length} of {total} records <span><button disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button> <button disabled={records.length === 0 || page * 20 >= total} onClick={() => setPage(page + 1)}>Next</button></span></div></GlassCard></motion.div>
+}
+
+export default function Page() {
+  const [session, setSession] = useState<Session | null>(null)
+  const [active, setActive] = useState<PageId>('overview')
+  useEffect(() => {
+    const saved = localStorage.getItem('trace_mark_session')
+    if (saved) {
+      try { setSession(JSON.parse(saved) as Session) } catch { localStorage.removeItem('trace_mark_session') }
+    }
+  }, [])
+  if (!session) return <DynamicAuth onAuthenticated={(nextSession) => { localStorage.setItem('trace_mark_session', JSON.stringify(nextSession)); localStorage.setItem('trace_mark_token', nextSession.access_token); setSession(nextSession) }} />
+  return <div className="app-shell"><Sidebar active={active} onNavigate={setActive} /><div className="content-shell"><TopBar active={active} onReport={() => undefined} onLogout={() => { localStorage.removeItem('trace_mark_session'); localStorage.removeItem('trace_mark_token'); setSession(null) }} /><main className="main-content"><AnimatePresence mode="wait">{active === 'overview' && <DynamicOverview key="overview" token={session.access_token} user={session.user} />}{active === 'generator' && <DynamicGenerator key="generator" token={session.access_token} />}{active === 'inspector' && <Inspector key="inspector" />}{active === 'audit' && <DynamicAudit key="audit" token={session.access_token} />}</AnimatePresence></main></div></div>
+}

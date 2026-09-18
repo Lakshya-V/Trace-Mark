@@ -53,9 +53,7 @@ class TraceMarkEncoder:
                             if not chars:
                                 continue
 
-                            font_name = span.get("font", "helv")
-                            if "+" in font_name:
-                                font_name = font_name.split("+")[1]
+                            font_name = "helv"
 
                             font_size = span.get("size", 11)
                             font_color = fitz.sRGB_to_pdf(span.get("color", 0))

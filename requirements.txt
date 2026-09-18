@@ -1,26 +1,15 @@
-# fastapi
-# httpx
-# PyMuPDF==1.24.14
-# python-multipart
-# reedsolo
-# SQLAlchemy
-# numpy
-# opencv-python
-# Pillow
-# pytest
-# torch
-# uvicorn
-
+bcrypt
+crcmod
 fastapi
 httpx
-PyMuPDF==1.24.14
-python-multipart
-reedsolo
-SQLAlchemy
-uvicorn
-crcmod
 numpy
 opencv-python
 Pillow
+PyMuPDF==1.24.14
+pytest
+python-multipart
+reedsolo
+SQLAlchemy
 torch
 torchvision
+uvicorn
