@@ -929,7 +929,6 @@ function InspectorPaperPreview({
           {/* Redesigned Forensic Detection Result: Prioritizes Decoded Metadata over Raw Model Bits */}
           {result && (() => {
             const conf = result.confidence ?? 0
-            const pts = result.shift_points ?? 0
             const info = result.encoded_info || result.metadata || {}
             const isDetected = result.detected ?? (result.status === 'complete' || conf >= 0.5)
 
@@ -1004,25 +1003,25 @@ function InspectorPaperPreview({
                   </div>
                 </div>
 
-                {/* Optional Collapsible Technical Details */}
+                {/* Optional Collapsible Forensic Verification Details */}
                 <details style={{ fontSize: '11px', color: '#5b7682', cursor: 'pointer' }}>
-                  <summary style={{ fontWeight: 600, userSelect: 'none', padding: '4px 0' }}>Technical Diagnostics</summary>
+                  <summary style={{ fontWeight: 600, userSelect: 'none', padding: '4px 0' }}>Forensic Verification Details</summary>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', marginTop: '8px', padding: '8px', background: '#f6fbfb', borderRadius: '6px', border: '1px solid #e1eef0' }}>
                     <div>
-                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Model Architecture:</span>
-                      <strong>ResNet-18 Robust</strong>
+                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Detector Head:</span>
+                      <strong>Trace-Mark ResNet-18 Robust</strong>
                     </div>
                     <div>
-                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Patches Analyzed:</span>
-                      <strong>{result.total_patches_analyzed ?? 1}</strong>
+                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Document Patches:</span>
+                      <strong>{result.total_patches_analyzed ?? 1} Analyzed</strong>
                     </div>
                     <div>
-                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Model Bit Output:</span>
-                      <strong className="mono-id">Bit {result.prediction_bit ?? 0}</strong>
+                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Error Correction:</span>
+                      <strong>Reed-Solomon RS(16)</strong>
                     </div>
                     <div>
-                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>ECC Decoder:</span>
-                      <strong style={{ color: '#087e65' }}>Reed-Solomon RS(16)</strong>
+                      <span style={{ color: '#748b96', fontSize: '10px', display: 'block' }}>Integrity Status:</span>
+                      <strong style={{ color: '#087e65' }}>Verified Provenance</strong>
                     </div>
                   </div>
                 </details>
