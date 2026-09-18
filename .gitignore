@@ -1,1 +1,6 @@
 env
+artifacts/
+*.db
+__pycache__/
+*.pth
+.pytest_cache/
