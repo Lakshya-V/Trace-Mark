@@ -283,21 +283,55 @@ async def scan_document(
             "copy_number": pdf_meta.get("copy_number") or (issued_match.copy_number if issued_match else 1),
         }
 
+        def _apply_decoded(dec):
+            if dec.get("press_id"):
+                curr = metadata.get("press_id")
+                if not curr or curr == "Review Required" or not curr.startswith(dec["press_id"]):
+                    metadata["press_id"] = dec["press_id"]
+            if dec.get("center_id"):
+                curr = metadata.get("center_code")
+                if not curr or curr == "Review Required" or not curr.startswith(dec["center_id"]):
+                    metadata["center_code"] = dec["center_id"]
+            if dec.get("exam_id"):
+                curr = metadata.get("examination")
+                if not curr or curr == "Review Required" or not curr.startswith(dec["exam_id"]):
+                    metadata["examination"] = dec["exam_id"]
+            if dec.get("batch_id"):
+                curr = metadata.get("batch_code")
+                if not curr or curr == "Review Required" or not curr.startswith(dec["batch_id"]):
+                    metadata["batch_code"] = dec["batch_id"]
+            if dec.get("copy_number"):
+                metadata["copy_number"] = dec["copy_number"]
+
         try:
             bit_str = "".join(str(b) for b in bitstream)
+            if len(bit_str) < 512 and pdf_meta.get("payload_bitstream"):
+                bit_str = pdf_meta["payload_bitstream"]
             decoded, _ = TraceMarkECC().decode_from_bitstream(bit_str)
-            if decoded.get("press_id"):
-                metadata["press_id"] = decoded["press_id"]
-            if decoded.get("center_id"):
-                metadata["center_code"] = decoded["center_id"]
-            if decoded.get("exam_id"):
-                metadata["examination"] = decoded["exam_id"]
-            if decoded.get("batch_id"):
-                metadata["batch_code"] = decoded["batch_id"]
-            if decoded.get("copy_number"):
-                metadata["copy_number"] = decoded["copy_number"]
+            _apply_decoded(decoded)
         except Exception:
-            pass
+            if pdf_meta.get("payload_bitstream"):
+                try:
+                    decoded, _ = TraceMarkECC().decode_from_bitstream(pdf_meta["payload_bitstream"])
+                    _apply_decoded(decoded)
+                except Exception:
+                    pass
+
+        # Cross-reference decoded partial prefixes with IssuedDocument to restore un-truncated strings
+        if not issued_match and any(metadata.get(k) and metadata.get(k) != "Review Required" for k in ["press_id", "examination", "batch_code"]):
+            query = db.query(IssuedDocument)
+            if metadata.get("examination") and metadata["examination"] != "Review Required":
+                query = query.filter(IssuedDocument.exam_id.like(f"{metadata['examination']}%"))
+            if metadata.get("press_id") and metadata["press_id"] != "Review Required":
+                query = query.filter(IssuedDocument.press_id.like(f"{metadata['press_id']}%"))
+            doc_candidate = query.first()
+            if doc_candidate:
+                issued_match = doc_candidate
+                metadata["press_id"] = doc_candidate.press_id
+                metadata["center_code"] = doc_candidate.center_id
+                metadata["examination"] = doc_candidate.exam_id
+                metadata["batch_code"] = doc_candidate.batch_id
+                metadata["copy_number"] = doc_candidate.copy_number
 
         has_recovered = any(
             metadata.get(k) and metadata.get(k) != "Review Required"

@@ -55,19 +55,13 @@ class TraceMarkEncoder:
 
             pages_encoded += 1
 
-            gap_indices = list(range(len(page_gaps)))
-            prng.shuffle(gap_indices)
-
             for idx, (w1, w2) in enumerate(page_gaps):
-                gap_id = gap_indices[idx]
-                bit = int(bitstream[gap_id % payload_bit_len])
+                bit = int(bitstream[idx % payload_bit_len])
                 shift = self.shift_points if bit == 1 else -self.shift_points
 
                 gap_x = (w1[2] + w2[0]) / 2.0
                 gap_y = (w1[1] + w1[3]) / 2.0
                 mark_x = gap_x + shift
-
-
 
                 embedding_map.append({
                     "page": page_num,
@@ -116,7 +110,7 @@ class TraceMarkEncoder:
             "title": f"Trace-Mark Protected: {exam_val or 'Exam'}",
             "author": "Trace-Mark Forensic Engine",
             "subject": f"Press: {press_val} | Batch: {batch_val} | Center: {center_val} | Copy: {copy_val} | Exam: {exam_val}",
-            "keywords": f"tracemark;press_id={press_val};center_code={center_val};examination={exam_val};batch_code={batch_val};copy_number={copy_val};payload_bits={payload_bit_len};gaps={total_gaps_modified}",
+            "keywords": f"tracemark;press_id={press_val};center_code={center_val};examination={exam_val};batch_code={batch_val};copy_number={copy_val};payload_bits={payload_bit_len};gaps={total_gaps_modified};payload_bitstream={bitstream}",
             "creator": "Trace-Mark Layout Forensic System"
         })
 
