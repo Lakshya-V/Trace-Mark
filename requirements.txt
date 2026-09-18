@@ -14,3 +14,4 @@ torch
 torchvision
 uvicorn
 PyJWT>=2.8.0
+slowapi

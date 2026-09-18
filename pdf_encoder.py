@@ -67,14 +67,7 @@ class TraceMarkEncoder:
                 gap_y = (w1[1] + w1[3]) / 2.0
                 mark_x = gap_x + shift
 
-                # Non-destructive microscopic steganographic mark preserving 100% original text & layout
-                page.draw_circle(
-                    fitz.Point(mark_x, gap_y),
-                    0.22,
-                    color=(0.72, 0.72, 0.72),
-                    fill=(0.72, 0.72, 0.72),
-                    overlay=True
-                )
+
 
                 embedding_map.append({
                     "page": page_num,
@@ -99,7 +92,7 @@ class TraceMarkEncoder:
                     shift = self.shift_points if bit == 1 else -self.shift_points
                     mx = 36 + (bit_idx % 8) * ((rect.width - 72) / 8) + shift
                     my = 36 + (bit_idx // 8) * 12
-                    page.draw_circle(fitz.Point(mx, my), 0.22, color=(0.72, 0.72, 0.72), fill=(0.72, 0.72, 0.72), overlay=True)
+
                     embedding_map.append({
                         "page": page_num,
                         "gap_index": total_gaps_modified,

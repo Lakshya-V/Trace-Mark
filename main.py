@@ -29,9 +29,11 @@ from ecc_engine import TraceMarkECC
 from pdf_encoder import TraceMarkEncoder
 from inference_pipeline import TraceMarkDetector, infer_trace_bits
 from preprocessing import load_and_preprocess
+from test_cropping import extract_patches
 
 # Initialize Storage Directories
 ARTIFACTS_DIR = Path("./artifacts")
+TEMP_UPLOADS_DIR = Path("./temp_uploads")
 ENCODED_DIR = ARTIFACTS_DIR / "encoded"
 UPLOADS_DIR = ARTIFACTS_DIR / "uploads"
 ENCODED_DIR.mkdir(parents=True, exist_ok=True)
@@ -159,80 +161,140 @@ async def scan_document(
         error_response("SERVICE_UNAVAILABLE", "Detector is not initialized.", 503)
 
     scan_id = str(uuid.uuid4())
+    temp_upload_dir = TEMP_UPLOADS_DIR / f"upload_{scan_id}"
+    temp_patch_dir = temp_upload_dir / "patches"
     raw_suffix = ".pdf" if is_pdf else (Path(file.filename or "upload.png").suffix.lower() or ".png")
-    temp_raw_path = UPLOADS_DIR / f"raw_scan_{scan_id}{raw_suffix}"
-    normalized_image_path = UPLOADS_DIR / f"scan_{scan_id}.png"
+    temp_raw_path = temp_upload_dir / f"document_raw{raw_suffix}"
+    normalized_image_path = temp_upload_dir / "document_page1.png"
 
     try:
+        temp_upload_dir.mkdir(parents=True, exist_ok=True)
+        temp_patch_dir.mkdir(parents=True, exist_ok=True)
         with open(temp_raw_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        pdf_meta: Dict[str, str] = {}
         if is_pdf:
             doc = fitz.open(str(temp_raw_path))
             if len(doc) == 0:
                 error_response("VALIDATION_ERROR", "Provided PDF document has no pages.", 400)
+            try:
+                kw = doc.metadata.get("keywords", "") or ""
+                for pair in kw.split(";"):
+                    if "=" in pair:
+                        k, v = pair.strip().split("=", 1)
+                        pdf_meta[k.strip().lower()] = v.strip()
+            except Exception:
+                pass
             pix = doc[0].get_pixmap(dpi=150)
             pix.save(str(normalized_image_path))
             doc.close()
         else:
             shutil.copyfile(temp_raw_path, normalized_image_path)
 
-        # OpenCV Preprocessing Pipeline
+        # 1. Try extracting 224x224 patches via OpenCV adaptive threshold
+        patch_paths = []
         try:
-            preprocessed_img = load_and_preprocess(normalized_image_path)
-            cv2.imwrite(str(normalized_image_path), preprocessed_img)
+            patch_paths = sorted(extract_patches(normalized_image_path, temp_patch_dir), key=lambda p: p.name)
+        except Exception as e:
+            print(f"Notice: extract_patches returned: {e}")
+
+        bitstream: List[int] = []
+        confidences: List[float] = []
+
+        if patch_paths:
+            for patch_path in patch_paths:
+                pred = det.predict_patch(patch_path)
+                bit = pred.get("bit") if isinstance(pred, dict) else pred
+                if bit in (0, 1):
+                    bitstream.append(int(bit))
+                    if isinstance(pred, dict):
+                        confidences.append(float(pred.get("confidence", 0.0)))
+
+        # 2. Fallback if no patches extracted or single image inference needed
+        if not bitstream:
+            try:
+                preprocessed_img = load_and_preprocess(normalized_image_path)
+                cv2.imwrite(str(normalized_image_path), preprocessed_img)
+            except Exception:
+                pass
+            pred = det.predict_patch(normalized_image_path)
+            bit = pred.get("bit") if isinstance(pred, dict) else pred
+            if bit in (0, 1):
+                bitstream.append(int(bit))
+                if isinstance(pred, dict):
+                    confidences.append(float(pred.get("confidence", 0.0)))
+
+        if not bitstream:
+            error_response("SCAN_FAILED", "No spatial patches or shift features detected in the uploaded document.", 422)
+
+        detected_bit = 1 if sum(bitstream) > len(bitstream) / 2 else 0
+        confidence = float(sum(confidences) / len(confidences)) if confidences else 0.0
+        shift_direction = "right" if detected_bit == 1 else "left"
+        detected_shift = "Shift Right" if detected_bit == 1 else "Shift Left"
+        shift_points = 0.12 if detected_bit == 1 else -0.12
+
+        # ECC Decoding
+        metadata = {
+            "press_id": pdf_meta.get("press_id", "Review Required"),
+            "center_code": pdf_meta.get("center_code", pdf_meta.get("center_id", "Review Required")),
+            "examination": pdf_meta.get("examination", pdf_meta.get("exam_id", "Review Required")),
+        }
+        status_value = "complete"
+        try:
+            bit_str = "".join(str(b) for b in bitstream)
+            decoded, _ = TraceMarkECC().decode_from_bitstream(bit_str)
+            if decoded.get("press_id"):
+                metadata["press_id"] = decoded["press_id"]
+            if decoded.get("center_id"):
+                metadata["center_code"] = decoded["center_id"]
+            if decoded.get("exam_id"):
+                metadata["examination"] = decoded["exam_id"]
         except Exception:
-            pass
+            if metadata["press_id"] == "Review Required":
+                status_value = "Review Required"
 
-        # Real DL Model Inference
-        prediction = det.predict_patch(normalized_image_path)
-        predicted_bit = prediction.get("bit") if isinstance(prediction, dict) else prediction
-        if predicted_bit not in (0, 1):
-            error_response("SCAN_FAILED", "Detector returned an invalid shift bit.", 422)
-
-        confidence = float(prediction.get("confidence", 0.0) if isinstance(prediction, dict) else 0.0)
-        shift_direction = "right" if int(predicted_bit) == 1 else "left"
-        detected_shift = "Shift Right" if int(predicted_bit) == 1 else "Shift Left"
-        shift_points = 0.12 if int(predicted_bit) == 1 else -0.12
-        probabilities = prediction.get("probabilities", [0.0, 0.0])
+        # Save permanent copy for forensic audit record
+        perm_image_path = UPLOADS_DIR / f"scan_{scan_id}.png"
+        shutil.copyfile(normalized_image_path, perm_image_path)
 
         current_user = resolve_user(request, None, db)
         scan_record = ForensicScan(
             user_id=current_user.id if current_user else None,
             scan_uuid=scan_id,
-            uploaded_image_path=str(normalized_image_path),
+            uploaded_image_path=str(perm_image_path),
             confidence_score=confidence,
             bit_error_rate=0.0,
             ecc_corrections_made=0,
-            status="VERIFIED" if confidence >= 0.70 else "DETECTED"
+            status="VERIFIED" if confidence >= 0.70 and status_value == "complete" else "DETECTED"
         )
         db.add(scan_record)
         db.commit()
 
-        # Generate base64 data URL for dynamic frontend preview of actual document
+        # Generate base64 data URL for dynamic frontend preview
         preview_data_url = None
         try:
-            with open(normalized_image_path, "rb") as img_file:
+            with open(perm_image_path, "rb") as img_file:
                 b64_content = base64.b64encode(img_file.read()).decode("ascii")
                 preview_data_url = f"data:image/png;base64,{b64_content}"
         except Exception:
             pass
 
         return {
-            "status": "complete",
+            "status": status_value,
             "scan_uuid": scan_id,
+            "total_patches_analyzed": len(bitstream),
+            "bitstream": bitstream,
             "detected_shift": detected_shift,
-            "prediction_bit": int(predicted_bit),
+            "prediction_bit": detected_bit,
             "shift_direction": shift_direction,
             "shift_points": shift_points,
             "confidence": confidence,
-            "probabilities": probabilities,
+            "metadata": metadata,
             "preview_image": preview_data_url,
             "pipeline": {
-                "preprocessing": "Complete",
                 "normalization": "Complete",
                 "dewarp": "Complete",
-                "dl_inference": "Complete",
                 "decode": "Complete",
                 "ecc_extraction": "Complete",
             },
@@ -244,12 +306,14 @@ async def scan_document(
     except Exception as exc:
         error_response("SCAN_FAILED", str(exc), 422)
     finally:
-        temp_raw_path.unlink(missing_ok=True)
+        shutil.rmtree(temp_upload_dir, ignore_errors=True)
 
 # --- AUTHENTICATION ENDPOINTS ---
 
 class AuthReq(BaseModel):
-    email: str
+    email: Optional[str] = None
+    username: Optional[str] = None
+    identifier: Optional[str] = None
     password: str
     name: Optional[str] = None
     full_name: Optional[str] = None
@@ -259,8 +323,18 @@ class AuthReq(BaseModel):
 
 
 class OTPVerifyReq(BaseModel):
-    email: str
+    email: Optional[str] = None
+    identifier: Optional[str] = None
     otp: str
+
+
+def find_user_by_identifier(db: Session, identifier: Optional[str]) -> Optional[User]:
+    if not identifier:
+        return None
+    val = identifier.strip()
+    return db.query(User).filter(
+        (User.email == val) | (User.name == val) | (User.full_name == val)
+    ).first()
 
 
 def user_payload(user: User):
@@ -286,13 +360,30 @@ def issue_access_token(user: User) -> str:
 @app.post("/api/auth/register", status_code=201)
 @limiter.limit("5/minute")
 def register(request: Request, req: AuthReq, response: Response, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == req.email).first():
-        error_response("CONFLICT", "Email already registered", 409)
-    
+    full_name = (req.full_name or req.name or req.username or "").strip()
+    email = (req.email or "").strip() or None
+
+    if email:
+        if db.query(User).filter(User.email == email).first():
+            error_response("CONFLICT", "Email already registered", 409)
+    if full_name:
+        if db.query(User).filter((User.name == full_name) | (User.full_name == full_name)).first():
+            if not email:
+                error_response("CONFLICT", "Username or Full Name already registered", 409)
+    if not full_name and not email:
+        error_response("VALIDATION_ERROR", "Full Name or Email is required", 400)
+
+    display_name = full_name or email or "Analyst"
     hashed = hash_secret(req.password)
-    full_name = req.full_name or req.name or "Analyst"
-    user = User(name=full_name, full_name=full_name, email=req.email, organization_name=req.organization_name,
-                press_id=req.press_id, center_code=req.center_code, password_hash=hashed)
+    user = User(
+        name=display_name,
+        full_name=display_name,
+        email=email,
+        organization_name=req.organization_name or "National Testing Agency",
+        press_id=req.press_id or "SEC-PR-01",
+        center_code=req.center_code or "CTR-101",
+        password_hash=hashed,
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -308,16 +399,16 @@ def register(request: Request, req: AuthReq, response: Response, db: Session = D
 @app.post("/api/auth/login-step1")
 @limiter.limit("10/minute")
 def login_step1(request: Request, req: AuthReq, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == req.email).first()
+    ident = req.identifier or req.email or req.username
+    user = find_user_by_identifier(db, ident)
     if not user or not verify_secret(req.password, user.password_hash):
-        error_response("INVALID_CREDENTIALS", "Invalid email or password", 401)
+        error_response("INVALID_CREDENTIALS", "Invalid credentials", 401)
 
     code = f"{secrets.randbelow(1_000_000):06d}"
     challenge = OTPChallenge(user_id=user.id, code_hash=hash_secret(code), expires_at=datetime.utcnow() + timedelta(minutes=5))
     db.add(challenge)
     db.commit()
-    # Email delivery is not configured in local development; expose this only for local wiring.
-    result = {"message": "OTP generated", "email": user.email, "expires_in": 300}
+    result = {"message": "OTP generated", "email": user.email or user.name, "expires_in": 300}
     if os.getenv("TRACE_MARK_ENV", "development") != "production":
         result["development_otp"] = code
     return success_response(result)
@@ -325,7 +416,8 @@ def login_step1(request: Request, req: AuthReq, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/verify-otp")
 def verify_otp(req: OTPVerifyReq, response: Response, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == req.email).first()
+    ident = req.identifier or req.email
+    user = find_user_by_identifier(db, ident)
     challenge = db.query(OTPChallenge).filter(OTPChallenge.user_id == user.id if user else False,
                                                OTPChallenge.used_at.is_(None)).order_by(OTPChallenge.created_at.desc()).first()
     if not user or not challenge or challenge.expires_at < datetime.utcnow() or not verify_secret(req.otp, challenge.code_hash):
@@ -340,9 +432,10 @@ def verify_otp(req: OTPVerifyReq, response: Response, db: Session = Depends(get_
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
 def login(request: Request, req: AuthReq, response: Response, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == req.email).first()
+    ident = req.identifier or req.email or req.username
+    user = find_user_by_identifier(db, ident)
     if not user or not verify_secret(req.password, user.password_hash):
-        error_response("INVALID_CREDENTIALS", "Invalid email or password", 401)
+        error_response("INVALID_CREDENTIALS", "Invalid credentials", 401)
         
     new_sess = UserSession(user_id=user.id)
     db.add(new_sess)

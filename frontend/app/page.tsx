@@ -74,17 +74,20 @@ type AuditRecord = { scan_id: string; source_file: string; analyst: string; resu
 
 type ScanResponse = {
   status: string
-  scan_uuid: string
-  detected_shift: string
-  prediction_bit: number
-  shift_direction: string
-  shift_points: number
-  confidence: number
+  scan_uuid?: string
+  detected_shift?: string
+  prediction_bit?: number
+  shift_direction?: string
+  shift_points?: number
+  confidence?: number
   probabilities?: number[]
   preview_image?: string
-  pipeline: Record<string, string>
+  pipeline?: Record<string, string>
   filename?: string
-  timestamp: string
+  timestamp?: string
+  total_patches_analyzed?: number
+  bitstream?: number[]
+  metadata?: { press_id?: string; center_code?: string; examination?: string }
 }
 
 const spring = { type: 'spring', stiffness: 420, damping: 30 } as const
@@ -597,6 +600,7 @@ function DynamicGenerator({ token }: { token: string }) {
   )
 }
 
+
 const pipelineStages = [
   'OpenCV Perspective Dewarp & Normalization',
   'Illumination & Contrast Correction',
@@ -606,21 +610,21 @@ const pipelineStages = [
 
 function Inspector({ token }: { token?: string }) {
   const [scanning, setScanning] = useState(false)
-  const [step, setStep] = useState(-1)
-  const [done, setDone] = useState(false)
   const [drag, setDrag] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [scanResult, setScanResult] = useState<ScanResponse | null>(null)
+  const [result, setResult] = useState<ScanResponse | null>(null)
   const [error, setError] = useState('')
+  const [step, setStep] = useState(0)
+  const [done, setDone] = useState(false)
+  const timer = useRef<NodeJS.Timeout[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
-  const timer = useRef<ReturnType<typeof setTimeout>[]>([])
 
   const onFileSelect = (file: File | null) => {
     if (!file) return
     setSelectedFile(file)
     setDone(false)
-    setScanResult(null)
+    setResult(null)
     setError('')
     if (previewUrl) URL.revokeObjectURL(previewUrl)
     if (file.type.startsWith('image/')) {
@@ -636,7 +640,7 @@ function Inspector({ token }: { token?: string }) {
     timer.current.forEach(clearTimeout)
     setScanning(true)
     setDone(false)
-    setScanResult(null)
+    setResult(null)
     setError('')
     setStep(0)
     pipelineStages.forEach((_, i) => timer.current.push(setTimeout(() => setStep(i), i * 500)))
@@ -659,7 +663,7 @@ function Inspector({ token }: { token?: string }) {
         throw new Error(detail || 'The document scan failed.')
       }
 
-      setScanResult(payload)
+      setResult(payload)
       setStep(3)
       setDone(true)
     } catch (scanError) {
@@ -780,6 +784,24 @@ function Inspector({ token }: { token?: string }) {
             </button>
 
             {error && <p role="alert" style={{ color: '#d06868', marginTop: '10px', fontSize: '12px' }}>{error}</p>}
+
+            {/* Recovered Metadata Grid from Provenance / ECC */}
+            {result?.metadata && (
+              <div className="scan-metadata-grid" style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px' }}>
+                  <small style={{ color: '#748b96', display: 'block', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700 }}>Press ID</small>
+                  <strong style={{ fontSize: '12px', color: '#163a4e' }}>{result.metadata.press_id || 'Review Required'}</strong>
+                </div>
+                <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px' }}>
+                  <small style={{ color: '#748b96', display: 'block', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700 }}>Center Code</small>
+                  <strong style={{ fontSize: '12px', color: '#163a4e' }}>{result.metadata.center_code || 'Review Required'}</strong>
+                </div>
+                <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px' }}>
+                  <small style={{ color: '#748b96', display: 'block', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700 }}>Examination</small>
+                  <strong style={{ fontSize: '12px', color: '#163a4e' }}>{result.metadata.examination || 'Review Required'}</strong>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -788,7 +810,7 @@ function Inspector({ token }: { token?: string }) {
           file={selectedFile}
           previewUrl={previewUrl}
           scanning={scanning}
-          result={scanResult}
+          result={result}
         />
       </div>
     </motion.div>
@@ -843,56 +865,60 @@ function InspectorPaperPreview({
           )}
 
           {/* Real DL Detection Results Overlay */}
-          {result && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3 }}
-              style={{ marginTop: '16px', borderTop: '1px solid #dcebec', paddingTop: '12px' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <div>
-                  <div className="eyebrow" style={{ marginBottom: '2px' }}>
-                    <span className="eyebrow-line" /> DL Model Detection Result
+          {result && (() => {
+            const conf = result.confidence ?? 0
+            const pts = result.shift_points ?? 0
+            return (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3 }}
+                style={{ marginTop: '16px', borderTop: '1px solid #dcebec', paddingTop: '12px' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div>
+                    <div className="eyebrow" style={{ marginBottom: '2px' }}>
+                      <span className="eyebrow-line" /> DL Model Detection Result
+                    </div>
+                    <h3 style={{ margin: 0, fontSize: '16px', color: '#153b4d' }}>{result.detected_shift} Detected</h3>
                   </div>
-                  <h3 style={{ margin: 0, fontSize: '16px', color: '#153b4d' }}>{result.detected_shift} Detected</h3>
+                  <div className="verified-stamp" style={{ margin: 0 }}>
+                    <Check size={16} /> <span>{conf >= 0.7 ? 'VERIFIED' : 'DETECTED'}</span>
+                  </div>
                 </div>
-                <div className="verified-stamp" style={{ margin: 0 }}>
-                  <Check size={16} /> <span>{result.confidence >= 0.7 ? 'VERIFIED' : 'DETECTED'}</span>
-                </div>
-              </div>
 
-              <div style={{ marginBottom: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#5b7682', marginBottom: '4px' }}>
-                  <span>Model Confidence</span>
-                  <span>{(result.confidence * 100).toFixed(1)}%</span>
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#5b7682', marginBottom: '4px' }}>
+                    <span>Model Confidence</span>
+                    <span>{(conf * 100).toFixed(1)}%</span>
+                  </div>
+                  <div style={{ height: '6px', width: '100%', background: '#e3ecef', borderRadius: '3px', overflow: 'hidden' }}>
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, Math.round(conf * 100))}%` }}
+                      transition={{ duration: 0.7 }}
+                      style={{ height: '100%', background: conf >= 0.7 ? '#10a77a' : '#287bc1', borderRadius: '3px' }}
+                    />
+                  </div>
                 </div>
-                <div style={{ height: '6px', width: '100%', background: '#e3ecef', borderRadius: '3px', overflow: 'hidden' }}>
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${Math.min(100, Math.round(result.confidence * 100))}%` }}
-                    transition={{ duration: 0.7 }}
-                    style={{ height: '100%', background: result.confidence >= 0.7 ? '#10a77a' : '#287bc1', borderRadius: '3px' }}
-                  />
-                </div>
-              </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '11px' }}>
-                <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px' }}>
-                  <small style={{ color: '#748b96', display: 'block' }}>Prediction Bit</small>
-                  <strong className="mono-id" style={{ fontSize: '13px' }}>{result.prediction_bit}</strong>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '11px' }}>
+                  <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px' }}>
+                    <small style={{ color: '#748b96', display: 'block' }}>Prediction Bit</small>
+                    <strong className="mono-id" style={{ fontSize: '13px' }}>{result.prediction_bit ?? 0}</strong>
+                  </div>
+                  <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px' }}>
+                    <small style={{ color: '#748b96', display: 'block' }}>Shift Offset</small>
+                    <strong>{pts > 0 ? `+${pts}` : pts} pt</strong>
+                  </div>
+                  <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px', gridColumn: 'span 2' }}>
+                    <small style={{ color: '#748b96', display: 'block' }}>Scan UUID</small>
+                    <span className="mono-id" style={{ fontSize: '10px' }}>{result.scan_uuid || 'Verified'}</span>
+                  </div>
                 </div>
-                <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px' }}>
-                  <small style={{ color: '#748b96', display: 'block' }}>Shift Offset</small>
-                  <strong>{result.shift_points > 0 ? `+${result.shift_points}` : result.shift_points} pt</strong>
-                </div>
-                <div style={{ background: '#f6fbfb', padding: '8px', borderRadius: '6px', gridColumn: 'span 2' }}>
-                  <small style={{ color: '#748b96', display: 'block' }}>Scan UUID</small>
-                  <span className="mono-id" style={{ fontSize: '10px' }}>{result.scan_uuid}</span>
-                </div>
-              </div>
-            </motion.div>
-          )}
+              </motion.div>
+            )
+          })()}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '360px', color: '#748b96', textAlign: 'center', padding: '20px' }}>
@@ -1128,10 +1154,7 @@ function DynamicAuth({ onAuthenticated }: { onAuthenticated: (session: Session) 
   const [otpStep, setOtpStep] = useState(false)
   const [form, setForm] = useState({
     full_name: '',
-    organization_name: '',
-    press_id: '',
-    center_code: '',
-    email: '',
+    identifier: '',
     password: '',
     confirm_password: '',
     otp: '',
@@ -1147,15 +1170,12 @@ function DynamicAuth({ onAuthenticated }: { onAuthenticated: (session: Session) 
     setMessage('')
     try {
       if (mode === 'register') {
+        if (!form.full_name.trim()) throw new Error('Full Name is required.')
         if (form.password !== form.confirm_password) throw new Error('Passwords do not match.')
         const session = await apiRequest<Session>('/api/auth/register', {
           method: 'POST',
           body: JSON.stringify({
-            full_name: form.full_name,
-            organization_name: form.organization_name,
-            press_id: form.press_id,
-            center_code: form.center_code,
-            email: form.email,
+            full_name: form.full_name.trim(),
             password: form.password,
           }),
         })
@@ -1163,14 +1183,14 @@ function DynamicAuth({ onAuthenticated }: { onAuthenticated: (session: Session) 
       } else if (!otpStep) {
         const result = await apiRequest<{ development_otp?: string }>('/api/auth/login-step1', {
           method: 'POST',
-          body: JSON.stringify({ email: form.email, password: form.password }),
+          body: JSON.stringify({ identifier: form.identifier.trim(), password: form.password }),
         })
         setOtpStep(true)
-        setMessage(result.development_otp ? `Development OTP: ${result.development_otp}` : 'Enter the 6-digit code sent to your email.')
+        setMessage(result.development_otp ? `Development OTP: ${result.development_otp}` : 'Enter the 6-digit code sent to your account.')
       } else {
         const session = await apiRequest<Session>('/api/auth/verify-otp', {
           method: 'POST',
-          body: JSON.stringify({ email: form.email, otp: form.otp }),
+          body: JSON.stringify({ identifier: form.identifier.trim(), otp: form.otp }),
         })
         onAuthenticated(session)
       }
@@ -1180,14 +1200,6 @@ function DynamicAuth({ onAuthenticated }: { onAuthenticated: (session: Session) 
       setBusy(false)
     }
   }
-
-  // Registration-only fields. NEVER rendered on the login page!
-  const registerFields = [
-    ['full_name', 'Full Name'],
-    ['organization_name', 'Organization Name'],
-    ['press_id', 'Press ID'],
-    ['center_code', 'Center Code'],
-  ] as const
 
   return (
     <main className="auth-shell">
@@ -1199,7 +1211,7 @@ function DynamicAuth({ onAuthenticated }: { onAuthenticated: (session: Session) 
         <div className="auth-copy">
           <div className="eyebrow"><span className="eyebrow-line" />Secure workspace</div>
           <h1>{otpStep ? 'Verify your identity' : mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h1>
-          <p>{otpStep ? 'Enter the 6-digit code sent to your email.' : mode === 'login' ? 'Sign in to access document provenance and forensic activity.' : 'Register your secure account to start protecting examination documents.'}</p>
+          <p>{otpStep ? 'Enter the 6-digit verification code.' : mode === 'login' ? 'Sign in to access document provenance and forensic activity.' : 'Register your secure analyst account with your name and password.'}</p>
         </div>
 
         <form className="auth-form" onSubmit={submit} autoComplete={mode === 'login' ? 'on' : 'off'}>
@@ -1219,59 +1231,69 @@ function DynamicAuth({ onAuthenticated }: { onAuthenticated: (session: Session) 
             </label>
           ) : (
             <>
-              {/* Registration fields: ONLY displayed when mode === 'register'. NEVER displayed on Login! */}
-              {mode === 'register' &&
-                registerFields.map(([key, label]) => (
-                  <label key={key}>
-                    {label}
+              {mode === 'register' ? (
+                <>
+                  <label>
+                    Full Name
                     <input
                       className="auth-input"
-                      placeholder={`Enter your ${label.toLowerCase()}...`}
-                      value={form[key]}
-                      onChange={update(key)}
+                      placeholder="Enter your full name..."
+                      value={form.full_name}
+                      onChange={update('full_name')}
                       required
                     />
                   </label>
-                ))}
-
-              {/* Login fields: Only Work Email and Password */}
-              <label>
-                Work Email
-                <input
-                  className="auth-input"
-                  type="email"
-                  placeholder="you@organization.gov"
-                  autoComplete="email"
-                  value={form.email}
-                  onChange={update('email')}
-                  required
-                />
-              </label>
-              <label>
-                Password
-                <input
-                  className="auth-input"
-                  type="password"
-                  placeholder="Enter your password"
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  value={form.password}
-                  onChange={update('password')}
-                  required
-                />
-              </label>
-              {mode === 'register' && (
-                <label>
-                  Confirm Password
-                  <input
-                    className="auth-input"
-                    type="password"
-                    placeholder="Re-enter your password"
-                    autoComplete="new-password"
-                    value={form.confirm_password}
-                    onChange={update('confirm_password')}
-                    required
-                  />
-                </label>
+                  <label>
+                    Password
+                    <input
+                      className="auth-input"
+                      type="password"
+                      placeholder="Create a secure password"
+                      autoComplete="new-password"
+                      value={form.password}
+                      onChange={update('password')}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Confirm Password
+                    <input
+                      className="auth-input"
+                      type="password"
+                      placeholder="Re-enter your password"
+                      autoComplete="new-password"
+                      value={form.confirm_password}
+                      onChange={update('confirm_password')}
+                      required
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label>
+                    Username or Email
+                    <input
+                      className="auth-input"
+                      placeholder="Enter username or email"
+                      autoComplete="username"
+                      value={form.identifier}
+                      onChange={update('identifier')}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Password
+                    <input
+                      className="auth-input"
+                      type="password"
+                      placeholder="Enter your password"
+                      autoComplete="current-password"
+                      value={form.password}
+                      onChange={update('password')}
+                      required
+                    />
+                  </label>
+                </>
               )}
             </>
           )}

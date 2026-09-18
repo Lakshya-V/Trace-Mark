@@ -21,7 +21,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     full_name = Column(String(100), nullable=True)
-    email = Column(String(120), unique=True, index=True, nullable=False)
+    email = Column(String(120), unique=True, index=True, nullable=True)
     organization_name = Column(String(160), nullable=True)
     press_id = Column(String(64), nullable=True)
     center_code = Column(String(64), nullable=True)

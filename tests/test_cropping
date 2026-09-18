@@ -1,0 +1,65 @@
+import cv2
+import numpy as np
+import os
+
+def extract_patches(image_path, output_dir, patch_size=224):
+    print(f"Processing: {image_path}")
+    img = cv2.imread(image_path)
+    if img is None:
+        print("Error: Could not load image.")
+        return
+
+    # 1. Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # 2. Adaptive Thresholding (The secret to beating shadows)
+    # This calculates the threshold for small regions, ignoring global lighting gradients
+    thresh = cv2.adaptiveThreshold(
+        gray, 255, 
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY_INV, 
+        21, 15
+    )
+
+    # 3. Morphological Dilation (Merge letters into words)
+    # We use a wide rectangle kernel to bridge the gaps between letters
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (18, 4))
+    dilated = cv2.dilate(thresh, kernel, iterations=2)
+
+    # 4. Find Contours (The bounding boxes for our words)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    os.makedirs(output_dir, exist_ok=True)
+    patch_count = 0
+
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        
+        # Filter out tiny noise specks or massive page-sized borders
+        if w > 30 and h > 10 and h < 100:
+            # Find the center of the detected word
+            center_x, center_y = x + w // 2, y + h // 2
+            
+            # Calculate a fixed-size crop box centered on the word
+            start_x = max(0, center_x - patch_size // 2)
+            start_y = max(0, center_y - patch_size // 2)
+            end_x = min(img.shape[1], center_x + patch_size // 2)
+            end_y = min(img.shape[0], center_y + patch_size // 2)
+            
+            patch = img[start_y:end_y, start_x:end_x]
+            
+            # Only keep perfect squares (ignores words cut off at the page edges)
+            if patch.shape[0] == patch_size and patch.shape[1] == patch_size:
+                cv2.imwrite(os.path.join(output_dir, f"patch_{patch_count:04d}.jpg"), patch)
+                patch_count += 1
+                
+    print(f"Successfully extracted {patch_count} word patches to {output_dir}")
+
+if __name__ == "__main__":
+    # Test this on one of the real degraded images your teammate provided
+    # Update this path to target one of your FAT/CAT exam scans
+    test_image = "data/real_document_conditions/images/BCSE202L-FAT-C2-2023-2024/page_01_shadow.jpg"
+    
+    output_folder = "data/test_extracted_patches"
+    
+    extract_patches(test_image, output_folder)
